@@ -2860,6 +2860,14 @@
 		<constant name="SUPPORTS_RASTERIZATION_RATE_MAP" value="14" enum="Features">
 			Support for rasterization rate maps. The current implementation targets Metal on Apple platforms. This allows for foveated rendering, which is used by the visionOS XR module.
 		</constant>
+		<constant name="SUPPORTS_SHADER_SUBGROUP_CLOCK" value="16" enum="Features">
+			Support for reading a clock scoped to the subgroup in shaders ([code]shaderSubgroupClock[/code] of [code]VK_KHR_shader_clock[/code]; [code]clockARB()[/code] and [code]clock2x32ARB()[/code] in GLSL with [code]GL_ARB_shader_clock[/code]).
+			[b]Note:[/b] This is currently only supported when using Vulkan, and only when [member ProjectSettings.rendering/rendering_device/vulkan/enable_shader_clock] is enabled.
+		</constant>
+		<constant name="SUPPORTS_SHADER_DEVICE_CLOCK" value="17" enum="Features">
+			Support for reading a clock scoped to the device in shaders ([code]shaderDeviceClock[/code] of [code]VK_KHR_shader_clock[/code]; [code]clockRealtimeEXT()[/code] and [code]clockRealtime2x32EXT()[/code] in GLSL with [code]GL_EXT_shader_realtime_clock[/code]).
+			[b]Note:[/b] This is currently only supported when using Vulkan, and only when [member ProjectSettings.rendering/rendering_device/vulkan/enable_shader_clock] is enabled.
+		</constant>
 		<constant name="LIMIT_MAX_BOUND_UNIFORM_SETS" value="0" enum="Limit">
 			Maximum number of uniform sets that can be bound at a given time.
 		</constant>

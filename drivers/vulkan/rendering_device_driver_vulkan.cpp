@@ -599,6 +599,12 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 	_register_requested_device_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_SPIRV_1_4_EXTENSION_NAME, false);
 
+	// Opt-in: shaders that read the clock (e.g. for profiling inside a compute dispatch) need this extension
+	// and its features enabled. It is not requested by default, so the device is unchanged unless asked for.
+	if (GLOBAL_GET("rendering/rendering_device/vulkan/enable_shader_clock")) {
+		_register_requested_device_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME, false);
+	}
+
 	// We don't actually use this extension, but some runtime components on some platforms
 	// can and will fill the validation layers with useless info otherwise if not enabled.
 	_register_requested_device_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, false);
@@ -937,6 +943,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		VkPhysicalDeviceSynchronization2FeaturesKHR sync_2_features = {};
 		VkPhysicalDeviceRayTracingValidationFeaturesNV raytracing_validation_features = {};
 		VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
+		VkPhysicalDeviceShaderClockFeaturesKHR shader_clock_features = {};
 
 		const bool use_1_2_features = physical_device_properties.apiVersion >= VK_API_VERSION_1_2;
 		if (use_1_2_features) {
@@ -1033,6 +1040,12 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 			next_features = &ray_query_features;
 		}
 
+		if (enabled_device_extension_names.has(VK_KHR_SHADER_CLOCK_EXTENSION_NAME)) {
+			shader_clock_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR;
+			shader_clock_features.pNext = next_features;
+			next_features = &shader_clock_features;
+		}
+
 		VkPhysicalDeviceFeatures2 device_features_2 = {};
 		device_features_2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 		device_features_2.pNext = next_features;
@@ -1124,6 +1137,11 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 
 		if (enabled_device_extension_names.has(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
 			ray_query_support = ray_query_features.rayQuery;
+		}
+
+		if (enabled_device_extension_names.has(VK_KHR_SHADER_CLOCK_EXTENSION_NAME)) {
+			shader_capabilities.shader_subgroup_clock_is_supported = shader_clock_features.shaderSubgroupClock;
+			shader_capabilities.shader_device_clock_is_supported = shader_clock_features.shaderDeviceClock;
 		}
 	}
 
@@ -1478,6 +1496,15 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 		ray_query_features.pNext = create_info_next;
 		ray_query_features.rayQuery = ray_query_support;
 		create_info_next = &ray_query_features;
+	}
+
+	VkPhysicalDeviceShaderClockFeaturesKHR shader_clock_features = {};
+	if (shader_capabilities.shader_subgroup_clock_is_supported || shader_capabilities.shader_device_clock_is_supported) {
+		shader_clock_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR;
+		shader_clock_features.pNext = create_info_next;
+		shader_clock_features.shaderSubgroupClock = shader_capabilities.shader_subgroup_clock_is_supported;
+		shader_clock_features.shaderDeviceClock = shader_capabilities.shader_device_clock_is_supported;
+		create_info_next = &shader_clock_features;
 	}
 
 	VkPhysicalDeviceVulkan11Features vulkan_1_1_features = {};
@@ -7516,6 +7543,10 @@ bool RenderingDeviceDriverVulkan::has_feature(Features p_feature) {
 #endif // defined(WINDOWS_ENABLED)
 		case SUPPORTS_GPU_MAPPABLE_BUFFER:
 			return device_local_host_visible_host_coherent_memory_support;
+		case SUPPORTS_SHADER_SUBGROUP_CLOCK:
+			return shader_capabilities.shader_subgroup_clock_is_supported;
+		case SUPPORTS_SHADER_DEVICE_CLOCK:
+			return shader_capabilities.shader_device_clock_is_supported;
 		default:
 			return false;
 	}
