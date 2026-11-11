@@ -88,6 +88,8 @@ class RenderingDeviceDriverVulkan : public RenderingDeviceDriver {
 		bool shader_int8_is_supported = false;
 		bool shader_subgroup_clock_is_supported = false;
 		bool shader_device_clock_is_supported = false;
+		bool shader_buffer_int64_atomics_is_supported = false;
+		bool shader_shared_int64_atomics_is_supported = false;
 	};
 
 	struct StorageBufferCapabilities {
