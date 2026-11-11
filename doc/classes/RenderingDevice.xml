@@ -2860,6 +2860,14 @@
 		<constant name="SUPPORTS_RASTERIZATION_RATE_MAP" value="14" enum="Features">
 			Support for rasterization rate maps. The current implementation targets Metal on Apple platforms. This allows for foveated rendering, which is used by the visionOS XR module.
 		</constant>
+		<constant name="SUPPORTS_SHADER_BUFFER_INT64_ATOMICS" value="16" enum="Features">
+			Support for 64-bit integer atomic operations on storage buffers in shaders ([code]shaderBufferInt64Atomics[/code] of [code]VK_KHR_shader_atomic_int64[/code], core in Vulkan 1.2; for example, [code]atomicAdd()[/code] on a [code]uint64_t[/code] storage buffer member in GLSL with [code]GL_EXT_shader_atomic_int64[/code]).
+			[b]Note:[/b] This is currently only supported when using Vulkan, and only when [member ProjectSettings.rendering/rendering_device/vulkan/enable_shader_int64_atomics] is enabled.
+		</constant>
+		<constant name="SUPPORTS_SHADER_SHARED_INT64_ATOMICS" value="17" enum="Features">
+			Support for 64-bit integer atomic operations on shared memory in shaders ([code]shaderSharedInt64Atomics[/code] of [code]VK_KHR_shader_atomic_int64[/code], core in Vulkan 1.2; for example, [code]atomicAdd()[/code] on a [code]shared uint64_t[/code] variable in GLSL with [code]GL_EXT_shader_atomic_int64[/code]).
+			[b]Note:[/b] This is currently only supported when using Vulkan, and only when [member ProjectSettings.rendering/rendering_device/vulkan/enable_shader_int64_atomics] is enabled.
+		</constant>
 		<constant name="LIMIT_MAX_BOUND_UNIFORM_SETS" value="0" enum="Limit">
 			Maximum number of uniform sets that can be bound at a given time.
 		</constant>

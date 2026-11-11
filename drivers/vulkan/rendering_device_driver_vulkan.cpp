@@ -607,6 +607,12 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 		_register_requested_device_extension(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME, true);
 	}
 
+	// Opt-in: shaders that use 64-bit integer atomics need these features enabled. They are core in Vulkan 1.2;
+	// the extension provides them on older devices. It is not requested by default, so the device is unchanged unless asked for.
+	if (GLOBAL_GET("rendering/rendering_device/vulkan/enable_shader_int64_atomics")) {
+		_register_requested_device_extension(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME, false);
+	}
+
 #if defined(VK_TRACK_DEVICE_MEMORY)
 	if (Engine::get_singleton()->is_extra_gpu_memory_tracking_enabled()) {
 		_register_requested_device_extension(VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME, false);
@@ -923,6 +929,7 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 		void *next_features = nullptr;
 		VkPhysicalDeviceVulkan12Features device_features_vk_1_2 = {};
 		VkPhysicalDeviceShaderFloat16Int8FeaturesKHR shader_features = {};
+		VkPhysicalDeviceShaderAtomicInt64FeaturesKHR shader_atomic_int64_features = {};
 		VkPhysicalDeviceBufferDeviceAddressFeaturesKHR buffer_device_address_features = {};
 		VkPhysicalDeviceVulkanMemoryModelFeaturesKHR vulkan_memory_model_features = {};
 		VkPhysicalDeviceFragmentShadingRateFeaturesKHR fsr_features = {};
@@ -958,6 +965,11 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 				vulkan_memory_model_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES_KHR;
 				vulkan_memory_model_features.pNext = next_features;
 				next_features = &vulkan_memory_model_features;
+			}
+			if (enabled_device_extension_names.has(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) {
+				shader_atomic_int64_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR;
+				shader_atomic_int64_features.pNext = next_features;
+				next_features = &shader_atomic_int64_features;
 			}
 		}
 
@@ -1053,6 +1065,11 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 				vulkan_memory_model_support = device_features_vk_1_2.vulkanMemoryModel;
 				vulkan_memory_model_device_scope_support = device_features_vk_1_2.vulkanMemoryModelDeviceScope;
 			}
+			// Core in Vulkan 1.2, so the extension doesn't need to be present. Only enabled if requested (opt-in).
+			if (requested_device_extensions.has(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) {
+				shader_capabilities.shader_buffer_int64_atomics_is_supported = device_features_vk_1_2.shaderBufferInt64Atomics;
+				shader_capabilities.shader_shared_int64_atomics_is_supported = device_features_vk_1_2.shaderSharedInt64Atomics;
+			}
 		} else {
 			if (enabled_device_extension_names.has(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)) {
 				shader_capabilities.shader_float16_is_supported = shader_features.shaderFloat16;
@@ -1064,6 +1081,10 @@ Error RenderingDeviceDriverVulkan::_check_device_capabilities() {
 			if (enabled_device_extension_names.has(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME)) {
 				vulkan_memory_model_support = vulkan_memory_model_features.vulkanMemoryModel;
 				vulkan_memory_model_device_scope_support = vulkan_memory_model_features.vulkanMemoryModelDeviceScope;
+			}
+			if (enabled_device_extension_names.has(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) {
+				shader_capabilities.shader_buffer_int64_atomics_is_supported = shader_atomic_int64_features.shaderBufferInt64Atomics;
+				shader_capabilities.shader_shared_int64_atomics_is_supported = shader_atomic_int64_features.shaderSharedInt64Atomics;
 			}
 		}
 
@@ -1374,6 +1395,17 @@ Error RenderingDeviceDriverVulkan::_initialize_device(const LocalVector<VkDevice
 	shader_features.shaderFloat16 = shader_capabilities.shader_float16_is_supported;
 	shader_features.shaderInt8 = shader_capabilities.shader_int8_is_supported;
 	create_info_next = &shader_features;
+
+	// The Vulkan 1.2 features are enabled with their individual structs (VkPhysicalDeviceVulkan12Features is not in this chain,
+	// and must not be added alongside them), so this struct is valid both with the extension and on Vulkan 1.2 and newer.
+	VkPhysicalDeviceShaderAtomicInt64FeaturesKHR shader_atomic_int64_features = {};
+	if (shader_capabilities.shader_buffer_int64_atomics_is_supported || shader_capabilities.shader_shared_int64_atomics_is_supported) {
+		shader_atomic_int64_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR;
+		shader_atomic_int64_features.pNext = create_info_next;
+		shader_atomic_int64_features.shaderBufferInt64Atomics = shader_capabilities.shader_buffer_int64_atomics_is_supported;
+		shader_atomic_int64_features.shaderSharedInt64Atomics = shader_capabilities.shader_shared_int64_atomics_is_supported;
+		create_info_next = &shader_atomic_int64_features;
+	}
 
 	VkPhysicalDeviceBufferDeviceAddressFeaturesKHR buffer_device_address_features = {};
 	if (buffer_device_address_support) {
@@ -7516,6 +7548,10 @@ bool RenderingDeviceDriverVulkan::has_feature(Features p_feature) {
 #endif // defined(WINDOWS_ENABLED)
 		case SUPPORTS_GPU_MAPPABLE_BUFFER:
 			return device_local_host_visible_host_coherent_memory_support;
+		case SUPPORTS_SHADER_BUFFER_INT64_ATOMICS:
+			return shader_capabilities.shader_buffer_int64_atomics_is_supported && physical_device_features.shaderInt64;
+		case SUPPORTS_SHADER_SHARED_INT64_ATOMICS:
+			return shader_capabilities.shader_shared_int64_atomics_is_supported && physical_device_features.shaderInt64;
 		default:
 			return false;
 	}
