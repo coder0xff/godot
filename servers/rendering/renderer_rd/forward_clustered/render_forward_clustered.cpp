@@ -223,29 +223,6 @@ RID RenderForwardClustered::RenderBufferDataForwardClustered::get_color_pass_fac
 	return FramebufferCacheRD::get_singleton()->get_cache_multiview(1, color, RID(), RID(), depth);
 }
 
-RID RenderForwardClustered::RenderBufferDataForwardClustered::get_color_pass_faces_fb(uint32_t p_color_pass_flags) {
-	ERR_FAIL_NULL_V(render_buffers, RID());
-	ERR_FAIL_COND_V(render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED, RID());
-	ERR_FAIL_COND_V(p_color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS), RID());
-	ERR_FAIL_COND_V(render_buffers->has_texture(RB_SCOPE_VRS, RB_TEXTURE), RID());
-	const uint32_t views = render_buffers->get_view_count();
-	Vector<RID> textures;
-	Vector<RD::FramebufferPass> passes;
-	for (uint32_t v = 0; v < views; v++) {
-		textures.push_back(render_buffers->get_internal_texture(v));
-	}
-	for (uint32_t v = 0; v < views; v++) {
-		textures.push_back(render_buffers->get_depth_texture(v));
-	}
-	for (uint32_t v = 0; v < views; v++) {
-		RD::FramebufferPass pass;
-		pass.color_attachments.push_back(v);
-		pass.depth_attachment = views + v;
-		passes.push_back(pass);
-	}
-	return FramebufferCacheRD::get_singleton()->get_cache_multipass(textures, passes, 1);
-}
-
 RID RenderForwardClustered::RenderBufferDataForwardClustered::get_depth_fb(DepthFrameBufferType p_type) {
 	ERR_FAIL_NULL_V(render_buffers, RID());
 	bool use_msaa = render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED;
@@ -530,7 +507,6 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 		pipeline_key.framebuffer_format_id = framebuffer_format;
 		pipeline_key.wireframe = p_params->force_wireframe;
 		pipeline_key.depth_pre_pass_skipped = p_pass_mode == PASS_MODE_COLOR && p_params->depth_pre_pass_skipped;
-		pipeline_key.render_pass = p_pass_mode == PASS_MODE_COLOR ? p_params->render_pass : 0;
 		pipeline_key.ubershader = 0;
 
 		bool emulate_point_size = shader->uses_point_size && scene_shader.emulate_point_size;
@@ -2375,18 +2351,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// (no culling per face yet): the passes' fixed cost, measured against one multiview pass.
 			const bool face_passes = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(opaque_color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/face_passes");
 			if (face_passes) {
-				const uint32_t views = p_render_data->scene_data->view_count;
 				Vector<Color> face_clear;
 				if (!load_color) {
-					for (uint32_t v = 0; v < views; v++) {
-						face_clear.push_back(clear_color);
-					}
+					face_clear.push_back(clear_color);
 				}
-				// One draw list for the six faces, each a subpass of one framebuffer: its setup is paid once.
-				const RID faces_fb = rb_data->get_color_pass_faces_fb(opaque_color_pass_flags);
-				const RD::FramebufferFormatID faces_format = RD::get_singleton()->framebuffer_get_format(faces_fb);
-				render_list_params.framebuffer_format = faces_format;
-				RD::DrawListID face_draw_list = RD::get_singleton()->draw_list_begin(faces_fb, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, face_clear, 0.0f, 0u, p_render_data->render_region);
 				const bool face_cull = GLOBAL_GET_CACHED(bool, "rendering/multiview/face_cull");
 				const RenderList &opaque = render_list[RENDER_LIST_OPAQUE];
 				// The draws the faces issue, in place of the whole list's (a draw a run of equal elements).
@@ -2445,13 +2413,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 					} else {
 						face_draws += list_draws;
 					}
-					if (v > 0) {
-						face_draw_list = RD::get_singleton()->draw_list_switch_to_next_pass();
-					}
-					render_list_params.render_pass = v;
-					_render_list(face_draw_list, faces_format, &render_list_params, 0, render_list_params.element_count);
+					RID face_fb = rb_data->get_color_pass_face_fb(opaque_color_pass_flags, v);
+					_render_list_with_draw_list(&render_list_params, face_fb, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, face_clear, 0.0f, 0u, p_render_data->render_region);
 				}
-				RD::get_singleton()->draw_list_end();
 				if (p_render_data->render_info) {
 					// Objects stay the render's whole cull; draw calls become the faces' (their mean a face against
 					// the objects shows the culling).

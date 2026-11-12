@@ -155,8 +155,6 @@ public:
 		RID get_color_pass_fb(uint32_t p_color_pass_flags);
 		// One view of the colour pass's framebuffer, single-view (a face pass).
 		RID get_color_pass_face_fb(uint32_t p_color_pass_flags, uint32_t p_view);
-		// Every view of the colour pass as a subpass of one framebuffer (the face passes in one draw list).
-		RID get_color_pass_faces_fb(uint32_t p_color_pass_flags);
 		RID get_depth_fb(DepthFrameBufferType p_type = DEPTH_FB);
 		RID get_specular_only_fb();
 		RID get_velocity_only_fb();
@@ -231,8 +229,6 @@ private:
 		// A subset of a render list (a face pass's culled list): each element's index in the list its instance data
 		// was filled for. Null: the elements are that list.
 		const uint32_t *element_indices = nullptr;
-		// The subpass the list is drawn in (a face pass of a capture render's multipass framebuffer).
-		uint32_t render_pass = 0;
 		bool reverse_cull = false;
 		PassMode pass_mode = PASS_MODE_COLOR;
 		uint32_t color_pass_flags = 0;
