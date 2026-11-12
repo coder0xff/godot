@@ -2186,11 +2186,14 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 
 	real_t max_distance = p_cam_projection.get_z_far();
 	real_t shadow_max = RSG::light_storage->light_get_param(p_instance->base, RSE::LIGHT_PARAM_SHADOW_MAX_DISTANCE);
-	if (shadow_max > 0 && !p_cam_orthogonal) { //its impractical (and leads to unwanted behaviors) to set max distance in orthogonal camera
+	if (shadow_max > 0 && (!p_cam_orthogonal || p_cam_box)) { //its impractical (and leads to unwanted behaviors) to set max distance in orthogonal camera
 		max_distance = MIN(shadow_max, max_distance);
 	}
-	max_distance = MAX(max_distance, p_cam_projection.get_z_near() + 0.001);
-	real_t min_distance = MIN(p_cam_projection.get_z_near(), max_distance);
+	// The box around a camera of more than two views (CameraData::set_multiview_camera): the splits are distances from
+	// the camera, from 0 (its near plane is -far).
+	real_t min_distance = p_cam_box ? 0.0 : p_cam_projection.get_z_near();
+	max_distance = MAX(max_distance, min_distance + 0.001);
+	min_distance = MIN(min_distance, max_distance);
 
 	real_t pancake_size = RSG::light_storage->light_get_param(p_instance->base, RSE::LIGHT_PARAM_SHADOW_PANCAKE_SIZE);
 
@@ -2218,15 +2221,6 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 
 	distances[splits] = max_distance;
 
-	if (p_cam_box) {
-		// The box around a camera of more than two views (CameraData::set_multiview_camera) spans depths from -far to
-		// far, and the scene shader's cascade selection and blur assume split distances that are positive and
-		// increasing. Every cascade covers the whole box, so the first, whose split is far, is the one used.
-		for (int i = 1; i <= splits; i++) {
-			distances[i] = max_distance;
-		}
-	}
-
 	real_t texture_size = RSG::light_storage->get_directional_light_shadow_size(light->instance);
 
 	bool overlap = RSG::light_storage->light_directional_get_blend_splits(p_instance->base);
@@ -2244,11 +2238,16 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 
 		real_t aspect = p_cam_projection.get_aspect();
 
-		if (p_cam_orthogonal) {
+		if (p_cam_box) {
+			// More than two views (a probe's faces, which look every way): cascade i covers the sphere of its split
+			// distance around the camera, the box holding that sphere being its receivers; the scene shader picks a
+			// fragment's cascade by its distance from the camera.
+			const real_t d = distances[i + 1];
+			camera_matrix.set_orthogonal(-d, d, -d, d, -d, d);
+		} else if (p_cam_orthogonal) {
 			Vector2 vp_he = p_cam_projection.get_viewport_half_extents();
 
-			const real_t cascade_near = p_cam_box ? distances[0] : distances[(i == 0 || !overlap) ? i : i - 1];
-			camera_matrix.set_orthogonal(vp_he.y * 2.0, aspect, cascade_near, distances[i + 1], false);
+			camera_matrix.set_orthogonal(vp_he.y * 2.0, aspect, distances[(i == 0 || !overlap) ? i : i - 1], distances[i + 1], false);
 		} else {
 			real_t fov = p_cam_projection.get_fov(); //this is actually yfov, because set aspect tries to keep it
 			camera_matrix.set_perspective(fov, aspect, distances[(i == 0 || !overlap) ? i : i - 1], distances[i + 1], true);
@@ -2334,6 +2333,11 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 				if (d > radius) {
 					radius = d;
 				}
+			}
+			if (p_cam_box) {
+				// The sphere around the camera, not the box's corners.
+				center = p_cam_transform.origin;
+				radius = distances[i + 1];
 			}
 
 			radius *= texture_size / (texture_size - 2.0); //add a texel by each side

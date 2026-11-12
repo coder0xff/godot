@@ -2545,7 +2545,7 @@ void fragment_shader(in SceneData scene_data) {
 				float shadow = 1.0;
 
 				if (directional_lights.data[i].shadow_opacity > 0.001) {
-					float depth_z = -vertex.z;
+					float depth_z = DIRECTIONAL_SHADOW_DEPTH(vertex);
 					vec3 light_dir = directional_lights.data[i].direction;
 					vec3 base_normal_bias = geo_normal * (1.0 - max(0.0, dot(light_dir, -geo_normal)));
 
@@ -2730,12 +2730,12 @@ void fragment_shader(in SceneData scene_data) {
 
 #ifdef USE_LIGHTMAP
 					if (shadowmask_mode == LIGHTMAP_SHADOWMASK_MODE_REPLACE) {
-						shadow = mix(shadow, shadowmask, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, vertex.z)); //done with negative values for performance
+						shadow = mix(shadow, shadowmask, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, -DIRECTIONAL_SHADOW_DEPTH(vertex))); //done with negative values for performance
 					} else if (shadowmask_mode == LIGHTMAP_SHADOWMASK_MODE_OVERLAY) {
-						shadow = shadowmask * mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, vertex.z)); //done with negative values for performance
+						shadow = shadowmask * mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, -DIRECTIONAL_SHADOW_DEPTH(vertex))); //done with negative values for performance
 					} else {
 #endif
-						shadow = mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, vertex.z)); //done with negative values for performance
+						shadow = mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, -DIRECTIONAL_SHADOW_DEPTH(vertex))); //done with negative values for performance
 #ifdef USE_LIGHTMAP
 					}
 #endif
@@ -2800,7 +2800,7 @@ void fragment_shader(in SceneData scene_data) {
 			float transmittance_z = transmittance_depth;
 #ifndef SHADOWS_DISABLED
 			if (directional_lights.data[i].shadow_opacity > 0.001) {
-				float depth_z = -vertex.z;
+				float depth_z = DIRECTIONAL_SHADOW_DEPTH(vertex);
 
 				if (depth_z < directional_lights.data[i].shadow_split_offsets.x) {
 					vec4 trans_vertex = vec4(vertex - geo_normal * directional_lights.data[i].shadow_transmittance_bias.x, 1.0);

@@ -257,6 +257,11 @@ capture_items;
 #define CLUSTER_LAYER_OFFSET(m_layer, m_pos) ((uint(m_layer) * CLUSTER_LAYER_CELLS + implementation_data.cluster_width * (m_pos).y + (m_pos).x) * (implementation_data.max_cluster_element_count_div_32 + 32))
 #define CLUSTER_LAYER_Z(m_depth) uint(clamp(((m_depth) / implementation_data.cluster_layer_z_far) * 32.0, 0.0, 31.0))
 
+// The depth a directional light's cascades are chosen and faded by: the view depth, or, in a render of more than two
+// views (a probe's faces: implementation_data.cluster_layer_count past 1), the distance from the camera, the cascades
+// being spheres around it.
+#define DIRECTIONAL_SHADOW_DEPTH(m_vertex) (implementation_data.cluster_layer_count > 1u ? length(m_vertex) : -(m_vertex).z)
+
 #define REFLECTION_MULTIPLIER 1.0
 
 #define SDFGI_MAX_CASCADES 8
