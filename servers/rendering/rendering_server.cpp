@@ -3701,6 +3701,9 @@ void RenderingServer::init() {
 	GLOBAL_DEF("rendering/multiview/face_passes", true);
 	// Each face pass draws only what its view's frustum holds.
 	GLOBAL_DEF("rendering/multiview/face_cull", true);
+	// In place of face passes: one pass into every view's layer, each material's capture variant drawing every
+	// instance once for each view (Forward+; experimental, for a light probe's capture).
+	GLOBAL_DEF("rendering/multiview/capture_pass", false);
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/lights_and_shadows/contact_shadow/shadow_length", PROPERTY_HINT_ENUM, "Short (Fast),Medium (Average),Long (Slow)"), 1);
 	GLOBAL_DEF(PropertyInfo(Variant::FLOAT, "rendering/lights_and_shadows/contact_shadow/surface_thickness", PROPERTY_HINT_RANGE, "0.001,0.1,0.001"), 0.01);
 

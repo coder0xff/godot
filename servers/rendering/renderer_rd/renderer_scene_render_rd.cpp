@@ -1389,6 +1389,7 @@ void RendererSceneRenderRD::render_scene(const Ref<RenderSceneBuffers> &p_render
 		scene_data.view_count = p_camera_data->view_count;
 		for (uint32_t v = 0; v < p_camera_data->view_count; v++) {
 			scene_data.view_eye_offset[v] = p_camera_data->view_offset[v].origin;
+			scene_data.view_offset[v] = p_camera_data->view_offset[v];
 			scene_data.view_projection[v] = p_camera_data->view_projection[v];
 		}
 

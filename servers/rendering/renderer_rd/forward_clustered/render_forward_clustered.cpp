@@ -126,6 +126,13 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::free_data() {
 		render_buffers->clear_context(RB_SCOPE_SSCS);
 	}
 
+	if (capture_layered_fb.is_valid() && RD::get_singleton()->framebuffer_is_valid(capture_layered_fb)) {
+		RD::get_singleton()->free_rid(capture_layered_fb);
+	}
+	capture_layered_fb = RID();
+	capture_layered_fb_color = RID();
+	capture_layered_fb_depth = RID();
+
 	if (cluster_builder) {
 		memdelete(cluster_builder);
 		cluster_builder = nullptr;
@@ -221,6 +228,28 @@ RID RenderForwardClustered::RenderBufferDataForwardClustered::get_color_pass_fac
 	RID color = render_buffers->get_internal_texture(p_view);
 	RID depth = render_buffers->get_depth_texture(p_view);
 	return FramebufferCacheRD::get_singleton()->get_cache_multiview(1, color, RID(), RID(), depth);
+}
+
+RID RenderForwardClustered::RenderBufferDataForwardClustered::get_color_pass_layered_fb() {
+	ERR_FAIL_NULL_V(render_buffers, RID());
+	// As a face pass's: a capture, without MSAA, separate specular, motion vectors or VRS.
+	ERR_FAIL_COND_V(render_buffers->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED, RID());
+	ERR_FAIL_COND_V(render_buffers->has_texture(RB_SCOPE_VRS, RB_TEXTURE), RID());
+	RID color = render_buffers->get_internal_texture();
+	RID depth = render_buffers->get_depth_texture();
+	if (capture_layered_fb.is_valid() && RD::get_singleton()->framebuffer_is_valid(capture_layered_fb) && capture_layered_fb_color == color && capture_layered_fb_depth == depth) {
+		return capture_layered_fb;
+	}
+	if (capture_layered_fb.is_valid() && RD::get_singleton()->framebuffer_is_valid(capture_layered_fb)) {
+		RD::get_singleton()->free_rid(capture_layered_fb);
+	}
+	Vector<RID> textures;
+	textures.push_back(color);
+	textures.push_back(depth);
+	capture_layered_fb = RD::get_singleton()->framebuffer_create_layered(textures, render_buffers->get_view_count());
+	capture_layered_fb_color = color;
+	capture_layered_fb_depth = depth;
+	return capture_layered_fb;
 }
 
 RID RenderForwardClustered::RenderBufferDataForwardClustered::get_depth_fb(DepthFrameBufferType p_type) {
@@ -477,7 +506,7 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 					pipeline_key.color_pass_flags |= SceneShaderForwardClustered::PIPELINE_COLOR_PASS_FLAG_MULTIVIEW;
 				}
 
-				pipeline_key.version = SceneShaderForwardClustered::PIPELINE_VERSION_COLOR_PASS;
+				pipeline_key.version = p_params->capture_layer_count > 0 ? SceneShaderForwardClustered::PIPELINE_VERSION_CAPTURE_PASS : SceneShaderForwardClustered::PIPELINE_VERSION_COLOR_PASS;
 			} break;
 			case PASS_MODE_SHADOW:
 			case PASS_MODE_DEPTH: {
@@ -624,7 +653,20 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 			bool indirect = bool(surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT);
 
-			if (emulate_point_size) {
+			bool capture_skipped = false;
+			if (p_params->capture_layer_count > 0) {
+				// The capture variant draws each instance once for each layer (its INSTANCE_INDEX the draw's instance
+				// over the layer count).
+				if (indirect || emulate_point_size) {
+					WARN_PRINT_ONCE("Indirect multimeshes and emulated point sizes are not drawn in a capture pass yet.");
+					capture_skipped = true;
+				}
+				instance_count *= p_params->capture_layer_count;
+			}
+
+			if (capture_skipped) {
+				// Not drawn.
+			} else if (emulate_point_size) {
 				if (indirect) {
 					WARN_PRINT("Indirect draws are not supported when emulating point size.");
 				}
@@ -1793,6 +1835,46 @@ void RenderForwardClustered::_process_sss(Ref<RenderSceneBuffersRD> p_render_buf
 	}
 }
 
+bool RenderForwardClustered::_fill_capture_layers(const RenderDataRD *p_render_data) {
+	const RenderSceneDataRD *scene_data = p_render_data->scene_data;
+	const uint32_t layers = scene_data->view_count;
+	ERR_FAIL_COND_V(layers == 0 || layers > RendererSceneRender::MAX_RENDER_VIEWS, false);
+
+	if (!scene_shader.is_capture_shader_group_enabled()) {
+		scene_shader.enable_capture_shader_group();
+	}
+
+	// std430: a 16-byte header (layer count, first layer), then each layer's view, inverse view, projection, inverse
+	// projection and the transform from its view space to the reference space, as five mat4s.
+	constexpr uint32_t LAYER_FLOATS = 16 * 5;
+	constexpr uint32_t HEADER_FLOATS = 4;
+	if (capture_layers_buffer.is_null()) {
+		capture_layers_buffer = RD::get_singleton()->storage_buffer_create((HEADER_FLOATS + RendererSceneRender::MAX_RENDER_VIEWS * LAYER_FLOATS) * sizeof(float));
+	}
+
+	float data[HEADER_FLOATS + RendererSceneRender::MAX_RENDER_VIEWS * LAYER_FLOATS] = {};
+	const uint32_t header[HEADER_FLOATS] = { layers, 0, 0, 0 };
+	memcpy(data, header, sizeof(header));
+
+	Projection correction;
+	correction.set_depth_correction(scene_data->flip_y);
+	for (uint32_t v = 0; v < layers; v++) {
+		// The view's camera: the reference camera turned (and moved) by the view's offset; its projection is the
+		// view's own, without the offset that the multiview projection folds in.
+		const Transform3D &offset = scene_data->view_offset[v];
+		const Transform3D face = scene_data->cam_transform * offset;
+		const Projection projection = correction * scene_data->view_projection[v] * Projection(offset);
+		float *layer = data + HEADER_FLOATS + v * LAYER_FLOATS;
+		RendererRD::MaterialStorage::store_transform(face.affine_inverse(), layer);
+		RendererRD::MaterialStorage::store_transform(face, layer + 16);
+		RendererRD::MaterialStorage::store_camera(projection, layer + 32);
+		RendererRD::MaterialStorage::store_camera(projection.inverse(), layer + 48);
+		RendererRD::MaterialStorage::store_transform(offset, layer + 64);
+	}
+	RD::get_singleton()->buffer_update(capture_layers_buffer, 0, (HEADER_FLOATS + layers * LAYER_FLOATS) * sizeof(float), data);
+	return true;
+}
+
 void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Color &p_default_bg_color) {
 	scene_state.used_uniform_buffer_count = 0;
 
@@ -2324,6 +2406,16 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, is_multiview, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
+	// The capture pass (rendering/multiview/capture_pass), where face passes could be drawn: one pass into every view's
+	// layer through each material's capture variant, with its own single-view render pass set.
+	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data);
+	RID capture_rp_uniform_set;
+	if (capture_pass) {
+		capture_render_pass = true;
+		capture_rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, false, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
+		capture_render_pass = false;
+	}
+
 	{
 		bool render_motion_pass = !render_list[RENDER_LIST_MOTION].elements.is_empty();
 
@@ -2349,8 +2441,19 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// More than two views with no pre-pass (a cube capture): each view is drawn as its own face pass, into its
 			// layer, by the multiview shader with the view as a specialization constant. Every face draws the whole list
 			// (no culling per face yet): the passes' fixed cost, measured against one multiview pass.
-			const bool face_passes = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(opaque_color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/face_passes");
-			if (face_passes) {
+			const bool face_passes = !capture_pass && depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(opaque_color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/face_passes");
+			if (capture_pass) {
+				Vector<Color> capture_clear;
+				if (!load_color) {
+					capture_clear.push_back(clear_color);
+				}
+				RenderListParameters capture_params = render_list_params;
+				capture_params.color_pass_flags = opaque_color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW);
+				capture_params.view_count = 1;
+				capture_params.render_pass_uniform_set = capture_rp_uniform_set;
+				capture_params.capture_layer_count = p_render_data->scene_data->view_count;
+				_render_list_with_draw_list(&capture_params, rb_data->get_color_pass_layered_fb(), RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, capture_clear, 0.0f, 0u, p_render_data->render_region);
+			} else if (face_passes) {
 				Vector<Color> face_clear;
 				if (!load_color) {
 					face_clear.push_back(clear_color);
@@ -3617,6 +3720,12 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 			// This will not be available when rendering reflection probes.
 			rb_data = rb->get_custom_data(RB_SCOPE_FORWARD_CLUSTERED);
 		}
+	}
+	if (capture_render_pass) {
+		// The capture pass's set: single-view, its screen textures the defaults.
+		is_multiview = false;
+		rb = Ref<RenderSceneBuffersRD>();
+		rb_data = Ref<RenderBufferDataForwardClustered>();
 	}
 
 	//default render buffer and scene state uniform set
@@ -5533,6 +5642,10 @@ RenderForwardClustered::RenderForwardClustered() {
 }
 
 RenderForwardClustered::~RenderForwardClustered() {
+	if (capture_layers_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(capture_layers_buffer);
+	}
+
 	if (ss_effects != nullptr) {
 		memdelete(ss_effects);
 		ss_effects = nullptr;

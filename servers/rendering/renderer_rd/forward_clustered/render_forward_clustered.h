@@ -155,6 +155,12 @@ public:
 		RID get_color_pass_fb(uint32_t p_color_pass_flags);
 		// One view of the colour pass's framebuffer, single-view (a face pass).
 		RID get_color_pass_face_fb(uint32_t p_color_pass_flags, uint32_t p_view);
+		// The colour and depth textures with every view as a layer of one single-view framebuffer (a capture pass,
+		// whose vertex shader picks the layer).
+		RID get_color_pass_layered_fb();
+		RID capture_layered_fb;
+		RID capture_layered_fb_color;
+		RID capture_layered_fb_depth;
 		RID get_depth_fb(DepthFrameBufferType p_type = DEPTH_FB);
 		RID get_specular_only_fb();
 		RID get_velocity_only_fb();
@@ -181,6 +187,12 @@ private:
 	RID _setup_sdfgi_render_pass_uniform_set(RID p_albedo_texture, RID p_emission_texture, RID p_emission_aniso_texture, RID p_geom_facing_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index);
 	// While a light probe capture renders: its layers' cameras (binding 39 of the render pass set; the default buffer otherwise).
 	RID capture_layers_buffer;
+	// While the capture pass's render pass set is made: single-view, no screen textures (screen-reading materials are
+	// not captured yet).
+	bool capture_render_pass = false;
+	// The capture layers' cameras for the render's views (each view's offset from the camera turns a 90° face about
+	// the probe; the camera's own space is the capture's reference space). Returns whether the buffer was filled.
+	bool _fill_capture_layers(const RenderDataRD *p_render_data);
 
 	RID _setup_render_pass_uniform_set(RenderListType p_render_list, const RenderDataRD *p_render_data, bool p_is_multiview, RID p_radiance_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index, bool p_use_directional_shadow_atlas = false);
 
@@ -248,6 +260,9 @@ private:
 		SceneShaderForwardClustered::ShaderSpecialization base_specialization = {};
 		bool use_material_feedback = false;
 		bool depth_pre_pass_skipped = false; // The opaque pass of a render whose depth pre-pass was skipped.
+		// Past 0, the capture pass: every draw's instances drawn once for each of this many layers, with the capture
+		// variant of each material's shader, into a layered framebuffer.
+		uint32_t capture_layer_count = 0;
 
 		RenderListParameters(GeometryInstanceSurfaceDataCache **p_elements, RenderElementInfo *p_element_info, int p_element_count, bool p_reverse_cull, PassMode p_pass_mode, uint32_t p_color_pass_flags, bool p_no_gi, bool p_use_directional_soft_shadows, RID p_render_pass_uniform_set, bool p_force_wireframe = false, const Vector2 &p_uv_offset = Vector2(), float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, uint32_t p_view_count = 1, uint32_t p_element_offset = 0, SceneShaderForwardClustered::ShaderSpecialization p_base_specialization = {}, bool p_use_material_feedback = false) {
 			elements = p_elements;

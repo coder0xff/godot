@@ -562,7 +562,16 @@ void vertex_shader(vec3 vertex_input,
 	diffuse_light_interp = vec4(0.0);
 	specular_light_interp = vec4(0.0);
 
-#ifdef USE_MULTIVIEW
+	{ // The vertex's lighting; in a capture, in the reference space (as the fragment shader's), not the face's.
+#if defined(MODE_CAPTURE)
+	const mat4 capture_reference_from_view = capture_layers.data[capture_layer].reference_from_view;
+	vec3 vertex = (capture_reference_from_view * vec4(vertex_interp, 1.0)).xyz;
+	vec3 normal = normalize(mat3(capture_reference_from_view) * normal_interp);
+	vec3 view = normalize(capture_reference_from_view[3].xyz - vertex);
+	vec4 capture_clip = scene_data.projection_matrix * vec4(vertex, 1.0);
+	vec2 clip_pos = clamp((capture_clip.xy / capture_clip.w) * 0.5 + 0.5, 0.0, 1.0);
+	float capture_vertex_depth = -vertex.z;
+#elif defined(USE_MULTIVIEW)
 	vec3 view = -normalize(vertex_interp - eye_offset);
 	vec2 clip_pos = clamp((combined_projected.xy / combined_projected.w) * 0.5 + 0.5, 0.0, 1.0);
 #else
@@ -574,7 +583,11 @@ void vertex_shader(vec3 vertex_input,
 	uvec2 screen_pixel = clamp(uvec2(clip_pos * vec2(screen_size)), uvec2(0), screen_size - uvec2(1));
 	uvec2 cluster_pos = screen_pixel >> implementation_data.cluster_shift;
 	uint cluster_offset = (implementation_data.cluster_width * cluster_pos.y + cluster_pos.x) * (implementation_data.max_cluster_element_count_div_32 + 32);
+#if defined(MODE_CAPTURE)
+	uint cluster_z = uint(clamp((capture_vertex_depth / scene_data.z_far) * 32.0, 0.0, 31.0));
+#else
 	uint cluster_z = uint(clamp((-vertex_interp.z / scene_data.z_far) * 32.0, 0.0, 31.0));
+#endif
 
 	{ //omni lights
 
@@ -696,6 +709,7 @@ void vertex_shader(vec3 vertex_input,
 
 		specular_light_interp.rgb += directional_specular;
 	}
+	} // The vertex's lighting.
 
 #endif //!defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)
 
@@ -1615,7 +1629,15 @@ void fragment_shader(in SceneData scene_data) {
 
 #ifndef MODE_RENDER_DEPTH
 
-#ifdef USE_MULTIVIEW
+#if defined(MODE_CAPTURE)
+	// The clusters are built in the reference camera's projection (a capture's: the box around it), not the face's:
+	// a fragment finds its cell by its position in the reference space, where it now is, not by its pixel.
+#undef projection_matrix // The face's, for the material's code; here the reference camera's.
+	vec4 capture_cluster_clip = scene_data.projection_matrix * vec4(vertex, 1.0);
+#define projection_matrix capture_layers.data[capture_layer_interp].projection_matrix
+	vec2 capture_cluster_uv = clamp((capture_cluster_clip.xy / capture_cluster_clip.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+	uvec2 cluster_pos = min(uvec2(capture_cluster_uv * scene_data.viewport_size), uvec2(scene_data.viewport_size) - 1u) >> implementation_data.cluster_shift;
+#elif defined(USE_MULTIVIEW)
 	uvec2 cluster_pos = uvec2(combined_uv.xy / scene_data.screen_pixel_size) >> implementation_data.cluster_shift;
 #else
 	uvec2 cluster_pos = uvec2(gl_FragCoord.xy) >> implementation_data.cluster_shift;
