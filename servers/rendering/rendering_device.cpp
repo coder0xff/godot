@@ -3730,12 +3730,34 @@ RID RenderingDevice::framebuffer_create_empty(const Size2i &p_size, TextureSampl
 RID RenderingDevice::framebuffer_create(const Vector<RID> &p_texture_attachments, FramebufferFormatID p_format_check, uint32_t p_view_count) {
 	_THREAD_SAFE_METHOD_
 
+	for (int i = 0; i < p_texture_attachments.size(); i++) {
+		Texture *texture = texture_owner.get_or_null(p_texture_attachments[i]);
+		ERR_FAIL_COND_V_MSG(texture && texture->layers != p_view_count, RID(), "Layers of our texture doesn't match view count for this framebuffer");
+	}
+
+	Vector<FramebufferPass> passes;
+	passes.push_back(_framebuffer_single_pass(p_texture_attachments));
+
+	return framebuffer_create_multipass(p_texture_attachments, passes, p_format_check, p_view_count);
+}
+
+RID RenderingDevice::framebuffer_create_layered(const Vector<RID> &p_texture_attachments, uint32_t p_layers, FramebufferFormatID p_format_check) {
+	_THREAD_SAFE_METHOD_
+
+	ERR_FAIL_COND_V_MSG(p_layers == 0, RID(), "A layered framebuffer needs at least one layer.");
+	ERR_FAIL_COND_V_MSG(p_layers > 1 && !has_feature(SUPPORTS_SHADER_OUTPUT_LAYER), RID(), "Layered framebuffers need SUPPORTS_SHADER_OUTPUT_LAYER (a vertex shader writing gl_Layer).");
+
+	Vector<FramebufferPass> passes;
+	passes.push_back(_framebuffer_single_pass(p_texture_attachments));
+
+	return _framebuffer_create_layers(p_texture_attachments, passes, p_format_check, 1, p_layers);
+}
+
+RenderingDevice::FramebufferPass RenderingDevice::_framebuffer_single_pass(const Vector<RID> &p_texture_attachments) {
 	FramebufferPass pass;
 
 	for (int i = 0; i < p_texture_attachments.size(); i++) {
 		Texture *texture = texture_owner.get_or_null(p_texture_attachments[i]);
-
-		ERR_FAIL_COND_V_MSG(texture && texture->layers != p_view_count, RID(), "Layers of our texture doesn't match view count for this framebuffer");
 
 		if (texture != nullptr) {
 			_check_transfer_worker_texture(texture);
@@ -3756,14 +3778,16 @@ RID RenderingDevice::framebuffer_create(const Vector<RID> &p_texture_attachments
 		}
 	}
 
-	Vector<FramebufferPass> passes;
-	passes.push_back(pass);
-
-	return framebuffer_create_multipass(p_texture_attachments, passes, p_format_check, p_view_count);
+	return pass;
 }
 
 RID RenderingDevice::framebuffer_create_multipass(const Vector<RID> &p_texture_attachments, const Vector<FramebufferPass> &p_passes, FramebufferFormatID p_format_check, uint32_t p_view_count) {
 	_THREAD_SAFE_METHOD_
+
+	return _framebuffer_create_layers(p_texture_attachments, p_passes, p_format_check, p_view_count, p_view_count);
+}
+
+RID RenderingDevice::_framebuffer_create_layers(const Vector<RID> &p_texture_attachments, const Vector<FramebufferPass> &p_passes, FramebufferFormatID p_format_check, uint32_t p_view_count, uint32_t p_layers) {
 
 	Vector<AttachmentFormat> attachments;
 	LocalVector<RDD::TextureID> textures;
@@ -3780,7 +3804,7 @@ RID RenderingDevice::framebuffer_create_multipass(const Vector<RID> &p_texture_a
 			af.usage_flags = AttachmentFormat::UNUSED_ATTACHMENT;
 			trackers.push_back(nullptr);
 		} else {
-			ERR_FAIL_COND_V_MSG(texture->layers != p_view_count, RID(), "Layers of our texture doesn't match view count for this framebuffer");
+			ERR_FAIL_COND_V_MSG(texture->layers != p_layers, RID(), "Layers of our texture doesn't match the framebuffer's layers (its view count, or the layered framebuffer's layers)");
 
 			_check_transfer_worker_texture(texture);
 
@@ -9370,6 +9394,7 @@ void RenderingDevice::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("framebuffer_format_get_texture_samples", "format", "render_pass"), &RenderingDevice::framebuffer_format_get_texture_samples, DEFVAL(0));
 	ClassDB::bind_method(D_METHOD("framebuffer_create", "textures", "validate_with_format", "view_count"), &RenderingDevice::_framebuffer_create, DEFVAL(INVALID_FORMAT_ID), DEFVAL(1));
 	ClassDB::bind_method(D_METHOD("framebuffer_create_multipass", "textures", "passes", "validate_with_format", "view_count"), &RenderingDevice::_framebuffer_create_multipass, DEFVAL(INVALID_FORMAT_ID), DEFVAL(1));
+	ClassDB::bind_method(D_METHOD("framebuffer_create_layered", "textures", "layers", "validate_with_format"), &RenderingDevice::_framebuffer_create_layered, DEFVAL(INVALID_FORMAT_ID));
 	ClassDB::bind_method(D_METHOD("framebuffer_create_empty", "size", "samples", "validate_with_format"), &RenderingDevice::framebuffer_create_empty, DEFVAL(TEXTURE_SAMPLES_1), DEFVAL(INVALID_FORMAT_ID));
 	ClassDB::bind_method(D_METHOD("framebuffer_get_format", "framebuffer"), &RenderingDevice::framebuffer_get_format);
 	ClassDB::bind_method(D_METHOD("framebuffer_is_valid", "framebuffer"), &RenderingDevice::framebuffer_is_valid);
@@ -10064,6 +10089,7 @@ void RenderingDevice::_bind_methods() {
 	BIND_ENUM_CONSTANT(SUPPORTS_SHADER_DEVICE_CLOCK);
 	BIND_ENUM_CONSTANT(SUPPORTS_SHADER_BUFFER_INT64_ATOMICS);
 	BIND_ENUM_CONSTANT(SUPPORTS_SHADER_SHARED_INT64_ATOMICS);
+	BIND_ENUM_CONSTANT(SUPPORTS_SHADER_OUTPUT_LAYER);
 
 	BIND_ENUM_CONSTANT(LIMIT_MAX_BOUND_UNIFORM_SETS);
 	BIND_ENUM_CONSTANT(LIMIT_MAX_FRAMEBUFFER_COLOR_ATTACHMENTS);
@@ -10256,6 +10282,11 @@ RenderingDevice::FramebufferFormatID RenderingDevice::_framebuffer_format_create
 RID RenderingDevice::_framebuffer_create(const TypedArray<RID> &p_textures, FramebufferFormatID p_format_check, uint32_t p_view_count) {
 	Vector<RID> textures = Variant(p_textures);
 	return framebuffer_create(textures, p_format_check, p_view_count);
+}
+
+RID RenderingDevice::_framebuffer_create_layered(const TypedArray<RID> &p_textures, uint32_t p_layers, FramebufferFormatID p_format_check) {
+	Vector<RID> textures = Variant(p_textures);
+	return framebuffer_create_layered(textures, p_layers, p_format_check);
 }
 
 RID RenderingDevice::_framebuffer_create_multipass(const TypedArray<RID> &p_textures, const TypedArray<RDFramebufferPass> &p_passes, FramebufferFormatID p_format_check, uint32_t p_view_count) {

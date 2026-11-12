@@ -574,6 +574,8 @@ Error RenderingDeviceDriverVulkan::_initialize_device_extensions() {
 
 	_register_requested_device_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true);
 	_register_requested_device_extension(VK_KHR_MULTIVIEW_EXTENSION_NAME, false);
+	// gl_Layer written by a vertex shader (SPIR-V 1.3's ShaderViewportIndexLayerEXT), for layered framebuffers.
+	_register_requested_device_extension(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME, false);
 	_register_requested_device_extension(VK_EXT_FRAGMENT_DENSITY_MAP_2_EXTENSION_NAME, false);
@@ -4314,9 +4316,15 @@ RDD::FramebufferID RenderingDeviceDriverVulkan::framebuffer_create(RenderPassID 
 
 	uint32_t fragment_density_map_offsets_layers = 0;
 	VkImageView *vk_img_views = ALLOCA_ARRAY(VkImageView, p_attachments.size());
+	// A pass of one view renders into every layer of its attachments (gl_Layer picks one); a multiview pass needs 1.
+	uint32_t layers = UINT32_MAX;
 	for (uint32_t i = 0; i < p_attachments.size(); i++) {
 		const TextureInfo *texture = (const TextureInfo *)p_attachments[i].id;
 		vk_img_views[i] = texture->vk_view;
+		layers = MIN(layers, texture->vk_view_create_info.subresourceRange.layerCount);
+	}
+	if (render_pass->view_count > 1 || layers == UINT32_MAX || layers == 0) {
+		layers = 1;
 	}
 
 	VkFramebufferCreateInfo framebuffer_create_info = {};
@@ -4326,7 +4334,7 @@ RDD::FramebufferID RenderingDeviceDriverVulkan::framebuffer_create(RenderPassID 
 	framebuffer_create_info.pAttachments = vk_img_views;
 	framebuffer_create_info.width = p_width;
 	framebuffer_create_info.height = p_height;
-	framebuffer_create_info.layers = 1;
+	framebuffer_create_info.layers = layers;
 
 	VkFramebuffer vk_framebuffer = VK_NULL_HANDLE;
 	VkResult err = vkCreateFramebuffer(vk_device, &framebuffer_create_info, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_FRAMEBUFFER), &vk_framebuffer);
@@ -5684,6 +5692,7 @@ RDD::RenderPassID RenderingDeviceDriverVulkan::render_pass_create(VectorView<Att
 	RenderPassInfo *render_pass = VersatileResource::allocate<RenderPassInfo>(resources_allocator);
 	render_pass->vk_render_pass = vk_render_pass;
 	render_pass->uses_fragment_density_map = uses_fragment_density_map;
+	render_pass->view_count = p_view_count;
 	return RenderPassID(render_pass);
 }
 
@@ -7583,6 +7592,8 @@ bool RenderingDeviceDriverVulkan::has_feature(Features p_feature) {
 			return shader_capabilities.shader_buffer_int64_atomics_is_supported && physical_device_features.shaderInt64;
 		case SUPPORTS_SHADER_SHARED_INT64_ATOMICS:
 			return shader_capabilities.shader_shared_int64_atomics_is_supported && physical_device_features.shaderInt64;
+		case SUPPORTS_SHADER_OUTPUT_LAYER:
+			return enabled_device_extension_names.has(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
 		default:
 			return false;
 	}

@@ -457,6 +457,17 @@
 				Once finished with your RID, you will want to free the RID using the RenderingDevice's [method free_rid] method.
 			</description>
 		</method>
+		<method name="framebuffer_create_layered">
+			<return type="RID" />
+			<param index="0" name="textures" type="RID[]" />
+			<param index="1" name="layers" type="int" />
+			<param index="2" name="validate_with_format" type="int" default="-1" />
+			<description>
+				Creates a new framebuffer of one view over every layer of its attachments: each texture must have [param layers] layers, and a draw chooses the layer it renders into by writing [code]gl_Layer[/code] in its vertex shader (with the GLSL extension [code]GL_ARB_shader_viewport_layer_array[/code]). Unlike a multiview framebuffer ([method framebuffer_create] with a view count), one draw can cover any number of layers, each primitive going to its own. Needs [constant SUPPORTS_SHADER_OUTPUT_LAYER] when [param layers] is more than 1.
+				It can be accessed with the RID that is returned.
+				Once finished with your RID, you will want to free the RID using the RenderingDevice's [method free_rid] method.
+			</description>
+		</method>
 		<method name="framebuffer_create_multipass">
 			<return type="RID" />
 			<param index="0" name="textures" type="RID[]" />
@@ -2875,6 +2886,10 @@
 		<constant name="SUPPORTS_SHADER_SHARED_INT64_ATOMICS" value="19" enum="Features">
 			Support for 64-bit integer atomic operations on shared memory in shaders ([code]shaderSharedInt64Atomics[/code] of [code]VK_KHR_shader_atomic_int64[/code], core in Vulkan 1.2; for example, [code]atomicAdd()[/code] on a [code]shared uint64_t[/code] variable in GLSL with [code]GL_EXT_shader_atomic_int64[/code]).
 			[b]Note:[/b] This is currently only supported when using Vulkan, and only when [member ProjectSettings.rendering/rendering_device/vulkan/enable_shader_int64_atomics] is enabled.
+		</constant>
+		<constant name="SUPPORTS_SHADER_OUTPUT_LAYER" value="20" enum="Features">
+			Support for a vertex shader writing [code]gl_Layer[/code] ([code]VK_EXT_shader_viewport_index_layer[/code]; [code]shaderOutputLayer[/code] in Vulkan 1.2), so one draw can render into several layers of a layered framebuffer ([method framebuffer_create_layered]).
+			[b]Note:[/b] This is currently only supported when using Vulkan.
 		</constant>
 		<constant name="LIMIT_MAX_BOUND_UNIFORM_SETS" value="0" enum="Limit">
 			Maximum number of uniform sets that can be bound at a given time.

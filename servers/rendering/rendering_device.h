@@ -716,6 +716,15 @@ public:
 
 	RID framebuffer_create(const Vector<RID> &p_texture_attachments, FramebufferFormatID p_format_check = INVALID_ID, uint32_t p_view_count = 1);
 	RID framebuffer_create_multipass(const Vector<RID> &p_texture_attachments, const Vector<FramebufferPass> &p_passes, FramebufferFormatID p_format_check = INVALID_ID, uint32_t p_view_count = 1);
+	// A framebuffer of one view over every layer of its attachments (each texture `p_layers` layers): a draw writes
+	// gl_Layer from its vertex shader to choose the layer (SUPPORTS_SHADER_OUTPUT_LAYER).
+	RID framebuffer_create_layered(const Vector<RID> &p_texture_attachments, uint32_t p_layers, FramebufferFormatID p_format_check = INVALID_ID);
+
+private:
+	RID _framebuffer_create_layers(const Vector<RID> &p_texture_attachments, const Vector<FramebufferPass> &p_passes, FramebufferFormatID p_format_check, uint32_t p_view_count, uint32_t p_layers);
+	FramebufferPass _framebuffer_single_pass(const Vector<RID> &p_texture_attachments);
+
+public:
 	RID framebuffer_create_empty(const Size2i &p_size, TextureSamples p_samples = TEXTURE_SAMPLES_1, FramebufferFormatID p_format_check = INVALID_ID);
 	bool framebuffer_is_valid(RID p_framebuffer) const;
 	void framebuffer_set_invalidation_callback(RID p_framebuffer, InvalidationCallback p_callback, void *p_userdata);
@@ -2016,6 +2025,7 @@ private:
 	FramebufferFormatID _framebuffer_format_create_multipass(const TypedArray<RDAttachmentFormat> &p_attachments, const TypedArray<RDFramebufferPass> &p_passes, uint32_t p_view_count);
 	RID _framebuffer_create(const TypedArray<RID> &p_textures, FramebufferFormatID p_format_check = INVALID_ID, uint32_t p_view_count = 1);
 	RID _framebuffer_create_multipass(const TypedArray<RID> &p_textures, const TypedArray<RDFramebufferPass> &p_passes, FramebufferFormatID p_format_check = INVALID_ID, uint32_t p_view_count = 1);
+	RID _framebuffer_create_layered(const TypedArray<RID> &p_textures, uint32_t p_layers, FramebufferFormatID p_format_check = INVALID_ID);
 
 	RID _sampler_create(const Ref<RDSamplerState> &p_state);
 

@@ -635,6 +635,9 @@ private:
 	struct RenderPassInfo {
 		VkRenderPass vk_render_pass = VK_NULL_HANDLE;
 		bool uses_fragment_density_map = false;
+		// Views of a multiview pass (1 for none). A framebuffer of a pass of one view takes its attachments' layers
+		// (a layered framebuffer, each layer chosen by the vertex shader's gl_Layer).
+		uint32_t view_count = 1;
 	};
 
 public:
