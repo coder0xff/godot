@@ -32,6 +32,7 @@
 
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_globals.h" // IWYU pragma: keep. RENDER_TIMESTAMP macro uses RSG.
+#include "servers/rendering/renderer_scene_render.h"
 
 ClusterBuilderSharedDataRD::ClusterBuilderSharedDataRD() {
 	RD::VertexFormatID vertex_format;
@@ -58,6 +59,8 @@ ClusterBuilderSharedDataRD::ClusterBuilderSharedDataRD() {
 		Vector<String> variants;
 		variants.push_back("");
 		variants.push_back("\n#define USE_ATTACHMENT\n");
+		variants.push_back("\n#define USE_LAYERS\n");
+		variants.push_back("\n#define USE_ATTACHMENT\n#define USE_LAYERS\n");
 
 		ClusterRender::ShaderVariant shader_variant;
 		RenderingDevice *rd = RD::get_singleton();
@@ -78,6 +81,9 @@ ClusterBuilderSharedDataRD::ClusterBuilderSharedDataRD() {
 		cluster_render.shader_version = cluster_render.cluster_render_shader.version_create();
 		cluster_render.shader = cluster_render.cluster_render_shader.version_get_shader(cluster_render.shader_version, shader_variant);
 		cluster_render.shader_pipelines[ClusterRender::PIPELINE_NORMAL] = RD::get_singleton()->render_pipeline_create(cluster_render.shader, fb_format, vertex_format, RD::RENDER_PRIMITIVE_TRIANGLES, rasterization_state, RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend_state, 0);
+		const ClusterRender::ShaderVariant layers_variant = shader_variant == ClusterRender::SHADER_NORMAL ? ClusterRender::SHADER_LAYERS : ClusterRender::SHADER_USE_ATTACHMENT_LAYERS;
+		cluster_render.shader_layers = cluster_render.cluster_render_shader.version_get_shader(cluster_render.shader_version, layers_variant);
+		cluster_render.shader_pipelines[ClusterRender::PIPELINE_NORMAL_LAYERS] = RD::get_singleton()->render_pipeline_create(cluster_render.shader_layers, fb_format, vertex_format, RD::RENDER_PRIMITIVE_TRIANGLES, rasterization_state, RD::PipelineMultisampleState(), RD::PipelineDepthStencilState(), blend_state, 0);
 
 		// On Apple platforms, gl_HelperInvocation (simd_is_helper_thread()) is unreliable with MSAA, causing rendering artifacts.
 		// Disable the helper invocation check for the MSAA pipeline via specialization constant.
@@ -92,6 +98,7 @@ ClusterBuilderSharedDataRD::ClusterBuilderSharedDataRD() {
 		}
 #endif
 		cluster_render.shader_pipelines[ClusterRender::PIPELINE_MSAA] = RD::get_singleton()->render_pipeline_create(cluster_render.shader, fb_format, vertex_format, RD::RENDER_PRIMITIVE_TRIANGLES, rasterization_state, ms, RD::PipelineDepthStencilState(), blend_state, 0, 0, specialization_constants);
+		cluster_render.shader_pipelines[ClusterRender::PIPELINE_MSAA_LAYERS] = RD::get_singleton()->render_pipeline_create(cluster_render.shader_layers, fb_format, vertex_format, RD::RENDER_PRIMITIVE_TRIANGLES, rasterization_state, ms, RD::PipelineDepthStencilState(), blend_state, 0, 0, specialization_constants);
 	}
 	{
 		Vector<String> versions;
@@ -266,6 +273,15 @@ void ClusterBuilderRD::_clear() {
 	element_buffer = RID();
 
 	memfree(render_elements);
+	memfree(render_element_bounds);
+	render_element_bounds = nullptr;
+	if (layer_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(layer_buffer);
+		layer_buffer = RID();
+	}
+	cluster_render_layers_uniform_set = RID();
+	max_layers = 1;
+	layer_count = 1;
 
 	render_elements = nullptr;
 	render_element_max = 0;
@@ -278,8 +294,9 @@ void ClusterBuilderRD::_clear() {
 	cluster_store_uniform_set = RID();
 }
 
-void ClusterBuilderRD::setup(Size2i p_screen_size, uint32_t p_max_elements, RID p_depth_buffer, RID p_depth_buffer_sampler, RID p_color_buffer) {
+void ClusterBuilderRD::setup(Size2i p_screen_size, uint32_t p_max_elements, RID p_depth_buffer, RID p_depth_buffer_sampler, RID p_color_buffer, uint32_t p_max_layers) {
 	ERR_FAIL_COND(p_max_elements == 0);
+	ERR_FAIL_COND(p_max_layers == 0);
 	ERR_FAIL_COND(p_screen_size.x < 1);
 	ERR_FAIL_COND(p_screen_size.y < 1);
 
@@ -295,19 +312,23 @@ void ClusterBuilderRD::setup(Size2i p_screen_size, uint32_t p_max_elements, RID 
 		max_elements_by_type += 32 - (max_elements_by_type % 32);
 	}
 
-	cluster_buffer_size = cluster_screen_size.x * cluster_screen_size.y * (max_elements_by_type / 32 + 32) * ELEMENT_TYPE_MAX * 4;
+	max_layers = p_max_layers;
+	layer_count = 1;
+
+	cluster_buffer_size = cluster_screen_size.x * cluster_screen_size.y * (max_elements_by_type / 32 + 32) * ELEMENT_TYPE_MAX * 4 * max_layers;
 
 	render_element_max = max_elements_by_type * ELEMENT_TYPE_MAX;
 
 	uint32_t element_tag_bits_size = render_element_max / 32;
 	uint32_t element_tag_depth_bits_size = render_element_max;
 
-	cluster_render_buffer_size = cluster_screen_size.x * cluster_screen_size.y * (element_tag_bits_size + element_tag_depth_bits_size) * 4; // Tag bits (element was used) and tag depth (depth range in which it was used).
+	cluster_render_buffer_size = cluster_screen_size.x * cluster_screen_size.y * (element_tag_bits_size + element_tag_depth_bits_size) * 4 * max_layers; // Tag bits (element was used) and tag depth (depth range in which it was used).
 
 	cluster_render_buffer = RD::get_singleton()->storage_buffer_create(cluster_render_buffer_size);
 	cluster_buffer = RD::get_singleton()->storage_buffer_create(cluster_buffer_size);
 
 	render_elements = static_cast<RenderElementData *>(memalloc(sizeof(RenderElementData) * render_element_max));
+	render_element_bounds = static_cast<float *>(memalloc(sizeof(float) * 4 * render_element_max));
 	render_element_count = 0;
 
 	element_buffer = RD::get_singleton()->storage_buffer_create(sizeof(RenderElementData) * render_element_max);
@@ -344,6 +365,16 @@ void ClusterBuilderRD::setup(Size2i p_screen_size, uint32_t p_max_elements, RID 
 		}
 
 		cluster_render_uniform_set = RD::get_singleton()->uniform_set_create(uniforms, shared->cluster_render.shader, 0);
+
+		if (max_layers > 1) {
+			layer_buffer = RD::get_singleton()->storage_buffer_create(sizeof(float) * 16 * max_layers);
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+			u.binding = 4;
+			u.append_id(layer_buffer);
+			uniforms.push_back(u);
+			cluster_render_layers_uniform_set = RD::get_singleton()->uniform_set_create(uniforms, shared->cluster_render.shader_layers, 0);
+		}
 	}
 
 	{
@@ -428,11 +459,29 @@ void ClusterBuilderRD::begin(const Transform3D &p_view_transform, const Projecti
 	projection = correction * projection;
 	adjusted_projection = correction * adjusted_projection;
 
+	layer_count = 1;
+
 	// Reset counts.
 	render_element_count = 0;
 	for (uint32_t i = 0; i < ELEMENT_TYPE_MAX; i++) {
 		cluster_count_by_type[i] = 0;
 	}
+}
+
+void ClusterBuilderRD::set_layers(uint32_t p_count, const Projection *p_projections, float p_z_near, float p_z_far) {
+	ERR_FAIL_COND_MSG(p_count == 0 || p_count > max_layers, "More cluster layers than the cluster builder was set up for.");
+	layer_count = p_count;
+	if (p_count == 1 && max_layers == 1) {
+		return;
+	}
+	layer_z_near = p_z_near;
+	layer_z_far = p_z_far;
+	float data[16 * RendererSceneRender::MAX_RENDER_VIEWS];
+	ERR_FAIL_COND(p_count > RendererSceneRender::MAX_RENDER_VIEWS);
+	for (uint32_t i = 0; i < p_count; i++) {
+		RendererRD::MaterialStorage::store_camera(p_projections[i], data + i * 16);
+	}
+	RD::get_singleton()->buffer_update(layer_buffer, 0, sizeof(float) * 16 * p_count, data);
 }
 
 void ClusterBuilderRD::bake_cluster() {
@@ -443,7 +492,21 @@ void ClusterBuilderRD::bake_cluster() {
 	// Clear cluster buffer.
 	RD::get_singleton()->buffer_clear(cluster_buffer, 0, cluster_buffer_size);
 
+	const bool layered = layer_count > 1;
 	if (render_element_count > 0) {
+		if (layered) {
+			// An element touches a layer's near plane if any of it is nearer the camera's origin than the plane's
+			// corners (near·√3 for 90° faces; by the bounding sphere, so a little more often than it need), its far
+			// plane if any of it is past the far distance. The same for every layer.
+			const float near_reach = layer_z_near * 1.7320508f * 1.05f;
+			for (uint32_t i = 0; i < render_element_count; i++) {
+				const float *b = render_element_bounds + i * 4;
+				const float d = Vector3(b[0], b[1], b[2]).length();
+				render_elements[i].touches_near = d - b[3] < near_reach;
+				render_elements[i].touches_far = d + b[3] > layer_z_far;
+			}
+		}
+
 		// Clear render buffer.
 		RD::get_singleton()->buffer_clear(cluster_render_buffer, 0, cluster_render_buffer_size);
 
@@ -452,7 +515,10 @@ void ClusterBuilderRD::bake_cluster() {
 			StateUniform state;
 
 			RendererRD::MaterialStorage::store_camera(adjusted_projection, state.projection);
-			state.inv_z_far = 1.0 / z_far;
+			state.inv_z_far = 1.0 / (layered ? layer_z_far : z_far);
+			state.cluster_layer_cells = cluster_screen_size.x * cluster_screen_size.y;
+			state.pad1 = 0;
+			state.pad2 = 0;
 			state.screen_to_clusters_shift = Math::get_shift_from_power_of_2(cluster_size);
 			state.screen_to_clusters_shift -= divisor; //screen is smaller, shift one less
 
@@ -474,8 +540,10 @@ void ClusterBuilderRD::bake_cluster() {
 			RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(framebuffer);
 			ClusterBuilderSharedDataRD::ClusterRender::PushConstant push_constant = {};
 
-			RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, shared->cluster_render.shader_pipelines[use_msaa ? ClusterBuilderSharedDataRD::ClusterRender::PIPELINE_MSAA : ClusterBuilderSharedDataRD::ClusterRender::PIPELINE_NORMAL]);
-			RD::get_singleton()->draw_list_bind_uniform_set(draw_list, cluster_render_uniform_set, 0);
+			typedef ClusterBuilderSharedDataRD::ClusterRender CR;
+			const CR::PipelineVersion pipeline = layered ? (use_msaa ? CR::PIPELINE_MSAA_LAYERS : CR::PIPELINE_NORMAL_LAYERS) : (use_msaa ? CR::PIPELINE_MSAA : CR::PIPELINE_NORMAL);
+			RD::get_singleton()->draw_list_bind_render_pipeline(draw_list, shared->cluster_render.shader_pipelines[pipeline]);
+			RD::get_singleton()->draw_list_bind_uniform_set(draw_list, layered ? cluster_render_layers_uniform_set : cluster_render_uniform_set, 0);
 
 			for (uint32_t i = 0; i < render_element_count;) {
 				push_constant.base_index = i;
@@ -509,9 +577,9 @@ void ClusterBuilderRD::bake_cluster() {
 
 				RD::get_singleton()->draw_list_set_push_constant(draw_list, &push_constant, sizeof(ClusterBuilderSharedDataRD::ClusterRender::PushConstant));
 
-				uint32_t instances = 1;
-				RD::get_singleton()->draw_list_draw(draw_list, true, instances);
-				i += instances;
+				// Layered: the element once for each layer (its instance the layer).
+				RD::get_singleton()->draw_list_draw(draw_list, true, layered ? layer_count : 1);
+				i += 1;
 			}
 			RD::get_singleton()->draw_list_end();
 		}
@@ -531,12 +599,12 @@ void ClusterBuilderRD::bake_cluster() {
 
 			push_constant.render_element_count_div_32 = Math::division_round_up(render_element_count, 32U);
 			push_constant.max_cluster_element_count_div_32 = max_elements_by_type / 32;
-			push_constant.pad1 = 0;
+			push_constant.layer_count = layer_count;
 			push_constant.pad2 = 0;
 
 			RD::get_singleton()->compute_list_set_push_constant(compute_list, &push_constant, sizeof(ClusterBuilderSharedDataRD::ClusterStore::PushConstant));
 
-			RD::get_singleton()->compute_list_dispatch_threads(compute_list, cluster_screen_size.x, cluster_screen_size.y, 1);
+			RD::get_singleton()->compute_list_dispatch_threads(compute_list, cluster_screen_size.x, cluster_screen_size.y, layer_count);
 
 			RD::get_singleton()->compute_list_end();
 		}

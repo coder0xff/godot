@@ -580,14 +580,28 @@ void vertex_shader(vec3 vertex_input,
 #endif
 
 	uvec2 screen_size = uvec2(1.0 / scene_data.screen_pixel_size);
-	uvec2 screen_pixel = clamp(uvec2(clip_pos * vec2(screen_size)), uvec2(0), screen_size - uvec2(1));
-	uvec2 cluster_pos = screen_pixel >> implementation_data.cluster_shift;
-	uint cluster_offset = (implementation_data.cluster_width * cluster_pos.y + cluster_pos.x) * (implementation_data.max_cluster_element_count_div_32 + 32);
+	uint cluster_offset;
+	uint cluster_z;
+	if (implementation_data.cluster_layer_count > 1u) {
+		// By view (as the fragment shader's): the vertex's pixel in its view and its depth there.
+		vec2 view_clip_pos = clamp((gl_Position.xy / gl_Position.w) * 0.5 + 0.5, 0.0, 1.0);
+		uvec2 cluster_pos = clamp(uvec2(view_clip_pos * vec2(screen_size)), uvec2(0), screen_size - uvec2(1)) >> implementation_data.cluster_shift;
 #if defined(MODE_CAPTURE)
-	uint cluster_z = uint(clamp((capture_vertex_depth / scene_data.z_far) * 32.0, 0.0, 31.0));
+		cluster_offset = CLUSTER_LAYER_OFFSET(capture_layer, cluster_pos);
 #else
-	uint cluster_z = uint(clamp((-vertex_interp.z / scene_data.z_far) * 32.0, 0.0, 31.0));
+		cluster_offset = CLUSTER_LAYER_OFFSET(ViewIndex, cluster_pos);
 #endif
+		cluster_z = CLUSTER_LAYER_Z(gl_Position.w);
+	} else {
+		uvec2 screen_pixel = clamp(uvec2(clip_pos * vec2(screen_size)), uvec2(0), screen_size - uvec2(1));
+		uvec2 cluster_pos = screen_pixel >> implementation_data.cluster_shift;
+		cluster_offset = (implementation_data.cluster_width * cluster_pos.y + cluster_pos.x) * (implementation_data.max_cluster_element_count_div_32 + 32);
+#if defined(MODE_CAPTURE)
+		cluster_z = uint(clamp((capture_vertex_depth / scene_data.z_far) * 32.0, 0.0, 31.0));
+#else
+		cluster_z = uint(clamp((-vertex_interp.z / scene_data.z_far) * 32.0, 0.0, 31.0));
+#endif
+	}
 
 	{ //omni lights
 
@@ -1605,6 +1619,8 @@ void fragment_shader(in SceneData scene_data) {
 	// The seam: the material's code ran in its face's view space; the renderer's lighting below runs in the capture's
 	// reference space, for which the light, shadow, decal and reflection probe buffers and the scene data are filled.
 	// Lighting depends only on positions and directions relative to each other, so it is the same in either frame.
+	// The fragment's depth in its face, for the cluster by face (below).
+	const float capture_face_depth = -vertex.z;
 	{
 		mat4 reference_from_view = capture_layers.data[capture_layer_interp].reference_from_view;
 		mat3 reference_rotation = mat3(reference_from_view);
@@ -1629,22 +1645,31 @@ void fragment_shader(in SceneData scene_data) {
 
 #ifndef MODE_RENDER_DEPTH
 
+	uvec2 cluster_pos;
+	uint cluster_offset;
+	uint cluster_z;
+	if (implementation_data.cluster_layer_count > 1u) {
+		// The clusters by view (a render of more than two views): each view's own grid, in its pixels, sliced along
+		// its own depth, as an ordinary camera's.
+		cluster_pos = uvec2(gl_FragCoord.xy) >> implementation_data.cluster_shift;
 #if defined(MODE_CAPTURE)
-	// The clusters are built in the reference camera's projection (a capture's: the box around it), not the face's:
-	// a fragment finds its cell by its position in the reference space, where it now is, not by its pixel.
-#undef projection_matrix // The face's, for the material's code; here the reference camera's.
-	vec4 capture_cluster_clip = scene_data.projection_matrix * vec4(vertex, 1.0);
-#define projection_matrix capture_layers.data[capture_layer_interp].projection_matrix
-	vec2 capture_cluster_uv = clamp((capture_cluster_clip.xy / capture_cluster_clip.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0));
-	uvec2 cluster_pos = min(uvec2(capture_cluster_uv * scene_data.viewport_size), uvec2(scene_data.viewport_size) - 1u) >> implementation_data.cluster_shift;
-#elif defined(USE_MULTIVIEW)
-	uvec2 cluster_pos = uvec2(combined_uv.xy / scene_data.screen_pixel_size) >> implementation_data.cluster_shift;
+		cluster_offset = CLUSTER_LAYER_OFFSET(capture_layer_interp, cluster_pos);
+		cluster_z = CLUSTER_LAYER_Z(capture_face_depth);
 #else
-	uvec2 cluster_pos = uvec2(gl_FragCoord.xy) >> implementation_data.cluster_shift;
+		cluster_offset = CLUSTER_LAYER_OFFSET(ViewIndex, cluster_pos);
+		cluster_z = CLUSTER_LAYER_Z((projection_matrix * vec4(vertex, 1.0)).w); // the view's depth (its projection is perspective)
 #endif
-	uint cluster_offset = (implementation_data.cluster_width * cluster_pos.y + cluster_pos.x) * (implementation_data.max_cluster_element_count_div_32 + 32);
-
-	uint cluster_z = uint(clamp((-vertex.z / scene_data.z_far) * 32.0, 0.0, 31.0));
+	} else {
+#if defined(MODE_CAPTURE)
+		cluster_pos = uvec2(0u); // Captures always have their clusters by view.
+#elif defined(USE_MULTIVIEW)
+		cluster_pos = uvec2(combined_uv.xy / scene_data.screen_pixel_size) >> implementation_data.cluster_shift;
+#else
+		cluster_pos = uvec2(gl_FragCoord.xy) >> implementation_data.cluster_shift;
+#endif
+		cluster_offset = (implementation_data.cluster_width * cluster_pos.y + cluster_pos.x) * (implementation_data.max_cluster_element_count_div_32 + 32);
+		cluster_z = uint(clamp((-vertex.z / scene_data.z_far) * 32.0, 0.0, 31.0));
+	}
 
 	//used for interpolating anything cluster related
 	vec3 vertex_ddx = dFdx(vertex);

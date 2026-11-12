@@ -8,6 +8,16 @@ layout(location = 0) in vec3 vertex_attrib;
 
 layout(location = 0) out float depth_interp;
 layout(location = 1) out flat uint element_index;
+#ifdef USE_LAYERS
+layout(location = 2) out flat uint layer_interp;
+
+// The layers (a light probe capture's faces, RenderForwardClustered's capture pass): each a grid of its own, the
+// elements drawn once into each (an instance a layer) through the layer's projection from the camera's view space.
+layout(set = 0, binding = 4, std430) buffer restrict readonly Layers {
+	mat4 data[];
+}
+layers;
+#endif
 
 layout(push_constant, std430) uniform Params {
 	uint base_index;
@@ -26,7 +36,7 @@ layout(set = 0, binding = 1, std140) uniform State {
 	uint cluster_data_size; // how much data for a single cluster takes
 
 	uint cluster_depth_offset;
-	uint pad0;
+	uint cluster_layer_cells; // with USE_LAYERS: the cells of one layer's grid
 	uint pad1;
 	uint pad2;
 }
@@ -48,15 +58,25 @@ layout(set = 0, binding = 2, std430) buffer restrict readonly RenderElements {
 render_elements;
 
 void main() {
+#ifdef USE_LAYERS
+	element_index = params.base_index;
+	layer_interp = gl_InstanceIndex;
+#else
 	element_index = params.base_index + gl_InstanceIndex;
+#endif
 
 	vec3 vertex = vertex_attrib;
 	vertex *= render_elements.data[element_index].scale;
 
 	vertex = vec4(vertex, 1.0) * render_elements.data[element_index].transform_inv;
+#ifdef USE_LAYERS
+	gl_Position = layers.data[gl_InstanceIndex] * vec4(vertex, 1.0);
+	depth_interp = gl_Position.w; // the depth in the layer's own view (its projections are perspective)
+#else
 	depth_interp = -vertex.z;
 
 	gl_Position = state.projection * vec4(vertex, 1.0);
+#endif
 }
 
 #[fragment]
@@ -75,6 +95,9 @@ layout(constant_id = 0) const bool sc_use_helper_check = true;
 
 layout(location = 0) in float depth_interp;
 layout(location = 1) in flat uint element_index;
+#ifdef USE_LAYERS
+layout(location = 2) in flat uint layer_interp;
+#endif
 
 layout(set = 0, binding = 1, std140) uniform State {
 	mat4 projection;
@@ -83,7 +106,7 @@ layout(set = 0, binding = 1, std140) uniform State {
 	uint cluster_screen_width; //
 	uint cluster_data_size; // how much data for a single cluster takes
 	uint cluster_depth_offset;
-	uint pad0;
+	uint cluster_layer_cells; // with USE_LAYERS: the cells of one layer's grid
 	uint pad1;
 	uint pad2;
 }
@@ -108,6 +131,9 @@ void main() {
 
 	//get linear cluster offset from screen poss
 	uint cluster_offset = cluster.x + state.cluster_screen_width * cluster.y;
+#ifdef USE_LAYERS
+	cluster_offset += layer_interp * state.cluster_layer_cells;
+#endif
 	//multiply by data size to position at the beginning of the element list for this cluster
 	cluster_offset *= state.cluster_data_size;
 

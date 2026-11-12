@@ -194,6 +194,9 @@ private:
 	// The capture layers' cameras for the render's views (each view's offset from the camera turns a 90° face about
 	// the probe; the camera's own space is the capture's reference space). Returns whether the buffer was filled.
 	bool _fill_capture_layers(const RenderDataRD *p_render_data);
+	// While a render of more than two views (a capture) has its clusters by view: its views (the grids); else 0.
+	uint32_t cluster_layers = 0;
+	float cluster_layers_z_far = 0.0;
 
 	// The capture pass's cull (capture_cull.glsl): each opaque element against each layer's frustum on the GPU, the
 	// pairs that pass compacted by draw, and each draw's indirect command. A draw is a run of equal elements (or one
@@ -370,7 +373,7 @@ private:
 			uint32_t ss_effects_flags;
 			float ssao_light_affect;
 			float ssao_ao_affect;
-			uint32_t pad1;
+			uint32_t cluster_layer_count; // Past 1: the clusters by view (a grid a view, renders of more than two views).
 
 			float sdf_to_bounds[16];
 
@@ -383,7 +386,7 @@ private:
 			uint32_t volumetric_fog_enabled;
 			float volumetric_fog_inv_length;
 			float volumetric_fog_detail_spread;
-			uint32_t volumetric_fog_pad;
+			float cluster_layer_z_far; // With the clusters by view: the views' far plane (their depth slices').
 		};
 
 		struct PushConstantUbershader {

@@ -76,14 +76,19 @@ class ClusterBuilderSharedDataRD {
 		enum ShaderVariant {
 			SHADER_NORMAL,
 			SHADER_USE_ATTACHMENT,
+			SHADER_LAYERS, // USE_LAYERS: a grid per layer (a light probe capture's faces)
+			SHADER_USE_ATTACHMENT_LAYERS,
 		};
 
 		enum PipelineVersion {
 			PIPELINE_NORMAL,
 			PIPELINE_MSAA,
+			PIPELINE_NORMAL_LAYERS,
+			PIPELINE_MSAA_LAYERS,
 			PIPELINE_MAX
 		};
 
+		RID shader_layers; // The USE_LAYERS variant (its set has the layers' projections at binding 4).
 		RID shader_pipelines[PIPELINE_MAX];
 	} cluster_render;
 
@@ -95,7 +100,7 @@ class ClusterBuilderSharedDataRD {
 			uint32_t render_element_count_div_32; // divided by 32
 			uint32_t max_cluster_element_count_div_32; // divided by 32
 
-			uint32_t pad1;
+			uint32_t layer_count; // grids one after another (a capture's faces), each type's cells all layers'
 			uint32_t pad2;
 		};
 
@@ -176,6 +181,17 @@ private:
 	RenderElementData *render_elements = nullptr;
 	uint32_t render_element_count = 0;
 	uint32_t render_element_max = 0;
+	// Each element's bounding sphere in the camera's view space (centre, radius), for the layers' near and far tests.
+	float *render_element_bounds = nullptr;
+
+	// Layers (set_layers): a grid per layer, each through its own projection from the camera's view space (a light
+	// probe capture's faces). 1: the camera's own grid.
+	uint32_t max_layers = 1;
+	uint32_t layer_count = 1;
+	float layer_z_near = 0.0;
+	float layer_z_far = 0.0;
+	RID layer_buffer;
+	RID cluster_render_layers_uniform_set;
 
 	Transform3D view_xform;
 	Projection adjusted_projection;
@@ -219,7 +235,7 @@ private:
 		uint32_t cluster_data_size; // How much data is needed for a single cluster.
 		uint32_t cluster_depth_offset;
 
-		uint32_t pad0;
+		uint32_t cluster_layer_cells; // A layer's grid's cells.
 		uint32_t pad1;
 		uint32_t pad2;
 	};
@@ -229,9 +245,23 @@ private:
 	RID debug_uniform_set;
 
 public:
-	void setup(Size2i p_screen_size, uint32_t p_max_elements, RID p_depth_buffer, RID p_depth_buffer_sampler, RID p_color_buffer);
+	void setup(Size2i p_screen_size, uint32_t p_max_elements, RID p_depth_buffer, RID p_depth_buffer_sampler, RID p_color_buffer, uint32_t p_max_layers = 1);
 
 	void begin(const Transform3D &p_view_transform, const Projection &p_cam_projection, bool p_flip_y);
+
+	// After begin: a grid for each of p_count layers (at most the setup's), each through its projection from the
+	// camera's view space (p_projections: corrected for the target, perspective, the same near and far). The cluster
+	// buffer then holds, for each element type, every layer's grid in turn.
+	void set_layers(uint32_t p_count, const Projection *p_projections, float p_z_near, float p_z_far);
+	uint32_t get_layer_count() const { return layer_count; }
+
+	_FORCE_INLINE_ void _set_bounds(const Vector3 &p_center, float p_radius) {
+		float *b = render_element_bounds + render_element_count * 4;
+		b[0] = p_center.x;
+		b[1] = p_center.y;
+		b[2] = p_center.z;
+		b[3] = p_radius;
+	}
 
 	_FORCE_INLINE_ void add_light(LightType p_type, const Transform3D &p_transform, float p_radius, float p_spot_aperture, const Vector2 &p_area_size) {
 		if (p_type == LIGHT_TYPE_OMNI && cluster_count_by_type[ELEMENT_TYPE_OMNI_LIGHT] == max_elements_by_type) {
@@ -287,6 +317,7 @@ public:
 			}
 
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(xform, e.transform_inv);
+			_set_bounds(xform.origin, radius * shared->sphere_overfit);
 
 		} else if (p_type == LIGHT_TYPE_SPOT) { /*LIGHT_TYPE_SPOT with no wide angle*/
 			radius *= shared->cone_overfit; // Overfit cone.
@@ -330,6 +361,8 @@ public:
 			e.original_index = cluster_count_by_type[ELEMENT_TYPE_SPOT_LIGHT];
 
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(xform, e.transform_inv);
+			// The cone from its apex: within its length and its base's radius of the apex.
+			_set_bounds(xform.origin, Math::sqrt(radius * radius + e.scale[0] * e.scale[0]));
 
 			cluster_count_by_type[ELEMENT_TYPE_SPOT_LIGHT]++;
 		} else { /* LIGHT_TYPE_AREA */
@@ -363,6 +396,7 @@ public:
 			e.original_index = cluster_count_by_type[ELEMENT_TYPE_AREA_LIGHT];
 
 			RendererRD::MaterialStorage::store_transform_transposed_3x4(xform, e.transform_inv);
+			_set_bounds(xform.origin, scale.length());
 
 			cluster_count_by_type[ELEMENT_TYPE_AREA_LIGHT]++;
 		}
@@ -410,6 +444,7 @@ public:
 		e.original_index = cluster_count_by_type[e.type];
 
 		RendererRD::MaterialStorage::store_transform_transposed_3x4(xform, e.transform_inv);
+		_set_bounds(xform.origin, scale.length());
 
 		cluster_count_by_type[e.type]++;
 		render_element_count++;

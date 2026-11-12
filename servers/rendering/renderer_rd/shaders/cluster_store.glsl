@@ -13,7 +13,7 @@ layout(push_constant, std430) uniform Params {
 	uint render_element_count_div_32; //divided by 32
 
 	uint max_cluster_element_count_div_32; //divided by 32
-	uint pad1;
+	uint layer_count; // grids, one after another (a capture's faces); each type's cells are all layers'
 	uint pad2;
 }
 params;
@@ -51,8 +51,9 @@ void main() {
 
 	//counter for each type of render_element
 
-	//base offset for this cluster
-	uint base_offset = (pos.x + params.cluster_screen_size.x * pos.y);
+	//base offset for this cluster (in its layer: gl_GlobalInvocationID.z)
+	uint layer_cells = params.cluster_screen_size.x * params.cluster_screen_size.y;
+	uint base_offset = (pos.x + params.cluster_screen_size.x * pos.y) + gl_GlobalInvocationID.z * layer_cells;
 	uint src_offset = base_offset * params.cluster_render_data_size;
 
 	uint render_element_offset = 0;
@@ -84,7 +85,7 @@ void main() {
 				}
 
 				// find cluster offset in the buffer used for indexing in the renderer
-				uint dst_offset = (base_offset + type * (params.cluster_screen_size.x * params.cluster_screen_size.y)) * (params.max_cluster_element_count_div_32 + 32);
+				uint dst_offset = (base_offset + type * (layer_cells * params.layer_count)) * (params.max_cluster_element_count_div_32 + 32);
 
 				uint orig_index = render_elements.data[index].original_index;
 				//store this index in the Z slices by setting the relevant bit

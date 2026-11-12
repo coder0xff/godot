@@ -171,7 +171,9 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::configure(RenderS
 
 	RID sampler = RendererRD::MaterialStorage::get_singleton()->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
 	// Note: Color and depth buffer is only used for our debug mode, we don't support stereo rendering for this.
-	cluster_builder->setup(p_render_buffers->get_internal_size(), p_render_buffers->get_max_cluster_elements(), p_render_buffers->get_depth_texture(0), sampler, p_render_buffers->get_internal_texture(0));
+	// More than two views (a capture's faces) may have their clusters by face: room for a grid a view.
+	const uint32_t cluster_layers = p_render_buffers->get_view_count() > 2 ? p_render_buffers->get_view_count() : 1;
+	cluster_builder->setup(p_render_buffers->get_internal_size(), p_render_buffers->get_max_cluster_elements(), p_render_buffers->get_depth_texture(0), sampler, p_render_buffers->get_internal_texture(0), cluster_layers);
 }
 
 RID RenderForwardClustered::RenderBufferDataForwardClustered::get_color_only_fb() {
@@ -780,7 +782,10 @@ uint32_t RenderForwardClustered::_setup_environment(const RenderDataRD *p_render
 	{
 		uint32_t cluster_screen_width = Math::division_round_up((uint32_t)p_screen_size.width, p_render_data->cluster_size);
 		uint32_t cluster_screen_height = Math::division_round_up((uint32_t)p_screen_size.height, p_render_data->cluster_size);
-		scene_state.ubo.cluster_type_size = cluster_screen_width * cluster_screen_height * (scene_state.ubo.max_cluster_element_count_div_32 + 32);
+		// By face (a capture's), each type holds every layer's grid.
+		scene_state.ubo.cluster_type_size = cluster_screen_width * cluster_screen_height * (scene_state.ubo.max_cluster_element_count_div_32 + 32) * MAX(cluster_layers, 1u);
+		scene_state.ubo.cluster_layer_count = cluster_layers;
+		scene_state.ubo.cluster_layer_z_far = cluster_layers_z_far;
 		scene_state.ubo.cluster_width = cluster_screen_width;
 	}
 
@@ -1782,6 +1787,23 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// More than two views have no combined frustum: cam_projection is then a box around the camera
 		// (CameraData::set_multiview_camera), which the clusters are built in and looked up through alike.
 		current_cluster_builder->begin(p_render_data->scene_data->cam_transform, p_render_data->scene_data->cam_projection, !p_render_data->reflection_probe.is_valid());
+		if (cluster_layers > 1) {
+			// The clusters by view: each view's grid through its own projection from the camera's space.
+			const RenderSceneDataRD *scene_data = p_render_data->scene_data;
+			Projection correction;
+			correction.set_depth_correction(scene_data->flip_y);
+			Projection projections[RendererSceneRender::MAX_RENDER_VIEWS];
+			float z_near = 0.0;
+			float z_far = 0.0;
+			for (uint32_t v = 0; v < cluster_layers; v++) {
+				Projection face = scene_data->view_projection[v] * Projection(scene_data->view_offset[v]);
+				z_near = face.get_z_near();
+				z_far = face.get_z_far();
+				face.adjust_perspective_znear(0.0001); // As the camera's: shapes crossing the near plane still cover it.
+				projections[v] = correction * face * Projection(scene_data->view_offset[v].affine_inverse());
+			}
+			current_cluster_builder->set_layers(cluster_layers, projections, z_near, z_far);
+		}
 	}
 
 	bool using_shadows = true;
@@ -1842,7 +1864,7 @@ bool RenderForwardClustered::_fill_capture_layers(const RenderDataRD *p_render_d
 		scene_shader.enable_capture_shader_group();
 	}
 
-	// std430: a 16-byte header (layer count, first layer), then each layer's view, inverse view, projection, inverse
+	// std430: a 16-byte header, then each layer's view, inverse view, projection, inverse
 	// projection and the transform from its view space to the reference space, as five mat4s.
 	constexpr uint32_t LAYER_FLOATS = 16 * 5;
 	constexpr uint32_t HEADER_FLOATS = 4;
@@ -2117,6 +2139,16 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	}
 
 	ERR_FAIL_NULL(current_cluster_builder);
+
+	// A render of more than two views (a probe's faces) has its clusters by view: a grid a view, in the view's pixels,
+	// sliced along its depth (no one projection holds every view; a box around the camera had cells too coarse to
+	// hold small lights and decals right). The views share their near and far planes.
+	cluster_layers = 0;
+	cluster_layers_z_far = 0.0;
+	if (rb_data.is_valid() && !is_reflection_probe && p_render_data->scene_data->view_count > 2) {
+		cluster_layers = p_render_data->scene_data->view_count;
+		cluster_layers_z_far = (p_render_data->scene_data->view_projection[0] * Projection(p_render_data->scene_data->view_offset[0])).get_z_far();
+	}
 
 	p_render_data->cluster_buffer = current_cluster_builder->get_cluster_buffer();
 	p_render_data->cluster_size = current_cluster_builder->get_cluster_size();
@@ -2560,6 +2592,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 		}
 	}
+	// The capture pass (rendering/multiview/capture_pass), where face passes could be drawn: one pass into every view's
+	// layer through each material's capture variant, with its own single-view render pass set.
+	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data) && _capture_cull(p_render_data, color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW));
+	if (capture_pass && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass_stats")) {
+		print_line(vformat("Capture pass clusters: %s.", cluster_layers > 1 ? vformat("by view, %d grids", cluster_layers) : String("the camera's")));
+	}
+
 	_pre_opaque_render(p_render_data, using_ssao, using_ssil, using_ssr, using_sscs, using_sdfgi || using_voxelgi, normal_roughness_views, voxel_gi_views);
 
 	if (current_cluster_builder) {
@@ -2580,9 +2619,6 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	RID rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_OPAQUE, p_render_data, is_multiview, radiance_texture, samplers, opaque_pass_uniform_buffer_index, true);
 
-	// The capture pass (rendering/multiview/capture_pass), where face passes could be drawn: one pass into every view's
-	// layer through each material's capture variant, with its own single-view render pass set.
-	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data) && _capture_cull(p_render_data, color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW));
 	RID capture_rp_uniform_set;
 	if (capture_pass) {
 		capture_render_pass = true;
@@ -3071,6 +3107,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			sdfgi->debug_draw(p_render_data->scene_data->view_count, p_render_data->scene_data->view_projection, p_render_data->scene_data->cam_transform, size.x, size.y, rb->get_render_target(), source_texture, view_rids);
 		}
 	}
+
+	// Renders other than this scene's (shadows, materials) have no clusters by view.
+	cluster_layers = 0;
+	cluster_layers_z_far = 0.0;
 }
 
 void RenderForwardClustered::_render_buffers_debug_draw(const RenderDataRD *p_render_data) {

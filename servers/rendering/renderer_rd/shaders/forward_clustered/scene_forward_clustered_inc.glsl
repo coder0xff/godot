@@ -251,6 +251,12 @@ layout(set = 1, binding = 41, std430) restrict readonly buffer CaptureItems {
 capture_items;
 #endif
 
+// The clusters by view (implementation_data.cluster_layer_count past 1: a render of more than two views, a probe's
+// faces): the offset of a cell of view p_layer's grid; its depth slice along that view.
+#define CLUSTER_LAYER_CELLS (implementation_data.cluster_type_size / (implementation_data.max_cluster_element_count_div_32 + 32) / implementation_data.cluster_layer_count)
+#define CLUSTER_LAYER_OFFSET(m_layer, m_pos) ((uint(m_layer) * CLUSTER_LAYER_CELLS + implementation_data.cluster_width * (m_pos).y + (m_pos).x) * (implementation_data.max_cluster_element_count_div_32 + 32))
+#define CLUSTER_LAYER_Z(m_depth) uint(clamp(((m_depth) / implementation_data.cluster_layer_z_far) * 32.0, 0.0, 31.0))
+
 #define REFLECTION_MULTIPLIER 1.0
 
 #define SDFGI_MAX_CASCADES 8
@@ -413,7 +419,7 @@ struct ImplementationData {
 	uint ss_effects_flags;
 	float ssao_light_affect;
 	float ssao_ao_affect;
-	uint pad1;
+	uint cluster_layer_count; // past 1: the clusters by view (a grid a view, its depth slices along the view)
 
 	mat4 sdf_to_bounds;
 
@@ -426,7 +432,7 @@ struct ImplementationData {
 	bool volumetric_fog_enabled;
 	float volumetric_fog_inv_length;
 	float volumetric_fog_detail_spread;
-	uint volumetric_fog_pad;
+	float cluster_layer_z_far; // with the clusters by view: the views' far plane
 };
 
 layout(set = 1, binding = 1, std140) uniform ImplementationDataBlock {
