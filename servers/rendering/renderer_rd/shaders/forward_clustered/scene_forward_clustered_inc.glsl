@@ -182,6 +182,40 @@ layout(constant_id = 2) const bool sc_emulate_point_size = false;
 
 #endif
 
+#ifdef MODE_CAPTURE
+// A light probe capture (RenderForwardClustered::probe_capture): every face of every probe is a layer of one layered
+// target. Each layer's camera: a face's view and projection, and the transform from its view space to the capture's
+// reference space (world-aligned, at the capture's origin), in which the renderer's own lighting runs: the light,
+// shadow, decal and reflection probe buffers and the scene data are filled for that reference camera.
+struct CaptureLayer {
+	mat4 view_matrix; // world -> the face's view space
+	mat4 inv_view_matrix; // the face's view space -> world
+	mat4 projection_matrix;
+	mat4 inv_projection_matrix;
+	mat4 reference_from_view; // the face's view space -> the reference space
+};
+
+layout(set = 1, binding = 39, std430) restrict readonly buffer CaptureLayers {
+	uint layer_count; // layers a draw instance is repeated over (until per-face lists, every layer)
+	uint layer_base;
+	uint pad0;
+	uint pad1;
+	CaptureLayer data[];
+}
+capture_layers;
+
+// The draw's instances are (instance, layer) pairs: the instance part and the layer.
+#define CAPTURE_LAYER (capture_layers.layer_base + uint(gl_InstanceIndex) % capture_layers.layer_count)
+#undef INSTANCE_INDEX
+#define INSTANCE_INDEX (uint(gl_InstanceIndex) / capture_layers.layer_count)
+#else
+// Declared in every variant, so the render pass's uniform set is the same for all (a small buffer when not capturing).
+layout(set = 1, binding = 39, std430) restrict readonly buffer CaptureLayers {
+	uint layer_count;
+}
+capture_layers;
+#endif
+
 #define REFLECTION_MULTIPLIER 1.0
 
 #define SDFGI_MAX_CASCADES 8

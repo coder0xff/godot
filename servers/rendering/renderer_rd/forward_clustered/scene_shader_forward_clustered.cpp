@@ -321,6 +321,16 @@ uint16_t SceneShaderForwardClustered::ShaderData::_get_shader_version(PipelineVe
 
 			return ShaderVersion::SHADER_VERSION_COLOR_PASS * 2 + shader_flags;
 		} break;
+		case PIPELINE_VERSION_CAPTURE_PASS: {
+			int shader_flags = 0;
+			if (p_ubershader) {
+				shader_flags |= SHADER_CAPTURE_PASS_FLAG_UBERSHADER;
+			}
+			if (p_color_pass_flags & PIPELINE_COLOR_PASS_FLAG_LIGHTMAP) {
+				shader_flags |= SHADER_CAPTURE_PASS_FLAG_LIGHTMAP;
+			}
+			return ShaderVersion::SHADER_VERSION_CAPTURE_PASS + shader_flags;
+		} break;
 		default: {
 			DEV_ASSERT(false && "Unknown pipeline version.");
 			return 0;
@@ -363,7 +373,8 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 		}
 	}
 
-	bool use_stencil = stencil_enabled && p_pipeline_key.version == PIPELINE_VERSION_COLOR_PASS;
+	const bool color_pass = p_pipeline_key.version == PIPELINE_VERSION_COLOR_PASS || p_pipeline_key.version == PIPELINE_VERSION_CAPTURE_PASS;
+	bool use_stencil = stencil_enabled && color_pass;
 	depth_stencil_state.enable_stencil = use_stencil;
 	if (use_stencil) {
 		static const RD::CompareOperator stencil_compare_rd_table[STENCIL_COMPARE_MAX] = {
@@ -432,7 +443,7 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 	multisample_state.sample_count = RD::get_singleton()->framebuffer_format_get_texture_samples(p_pipeline_key.framebuffer_format_id, 0);
 
 	RD::PipelineColorBlendState blend_state;
-	if (p_pipeline_key.version == PIPELINE_VERSION_COLOR_PASS) {
+	if (color_pass) {
 		if (p_pipeline_key.color_pass_flags & PIPELINE_COLOR_PASS_FLAG_TRANSPARENT) {
 			if (alpha_antialiasing_mode == ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE) {
 				multisample_state.enable_alpha_to_coverage = true;
@@ -627,6 +638,7 @@ SceneShaderForwardClustered::~SceneShaderForwardClustered() {
 	RD::get_singleton()->free_rid(default_vec4_xform_buffer);
 	RD::get_singleton()->free_rid(shadow_sampler);
 	RD::get_singleton()->free_rid(default_material_feedback_buffer);
+	RD::get_singleton()->free_rid(default_capture_layers_buffer);
 
 	material_storage->shader_free(overdraw_material_shader);
 	material_storage->shader_free(default_shader);
@@ -689,6 +701,20 @@ void SceneShaderForwardClustered::init(const String p_defines) {
 
 			shader_versions.push_back(ShaderRD::VariantDefine(group, version, false));
 		}
+
+		// The capture pass (SHADER_VERSION_CAPTURE_PASS on): a colour pass into a layered target, every material's own
+		// code in its face's camera, the renderer's lighting in the capture's reference space.
+		for (int i = 0; i < SHADER_CAPTURE_PASS_FLAG_COUNT; i++) {
+			String version = "\n#define MODE_CAPTURE\n";
+			if (i & SHADER_CAPTURE_PASS_FLAG_UBERSHADER) {
+				version += "\n#define UBERSHADER\n";
+			}
+			if (i & SHADER_CAPTURE_PASS_FLAG_LIGHTMAP) {
+				version += "\n#define USE_LIGHTMAP\n";
+			}
+			shader_versions.push_back(ShaderRD::VariantDefine(SHADER_GROUP_CAPTURE, version, false));
+		}
+		DEV_ASSERT(shader_versions.size() == ShaderVersion::SHADER_VERSION_CAPTURE_PASS + SHADER_CAPTURE_PASS_FLAG_COUNT);
 
 		Vector<uint64_t> dynamic_buffers;
 		dynamic_buffers.push_back(ShaderRD::DynamicBuffer::encode(RenderForwardClustered::RENDER_PASS_UNIFORM_SET, 2));
@@ -1009,6 +1035,7 @@ void fragment() {
 	{
 		default_vec4_xform_buffer = RD::get_singleton()->storage_buffer_create(256);
 		default_material_feedback_buffer = RD::get_singleton()->storage_buffer_create(256);
+		default_capture_layers_buffer = RD::get_singleton()->storage_buffer_create(16);
 		Vector<RD::Uniform> uniforms;
 		RD::Uniform u;
 		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
@@ -1038,6 +1065,14 @@ void SceneShaderForwardClustered::set_default_specialization(const ShaderSpecial
 
 void SceneShaderForwardClustered::enable_multiview_shader_group() {
 	shader.enable_group(SHADER_GROUP_MULTIVIEW);
+}
+
+void SceneShaderForwardClustered::enable_capture_shader_group() {
+	shader.enable_group(SHADER_GROUP_CAPTURE);
+}
+
+bool SceneShaderForwardClustered::is_capture_shader_group_enabled() const {
+	return shader.is_group_enabled(SHADER_GROUP_CAPTURE);
 }
 
 void SceneShaderForwardClustered::enable_advanced_shader_group(bool p_needs_multiview) {

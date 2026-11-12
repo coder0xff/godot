@@ -48,6 +48,7 @@ public:
 		SHADER_GROUP_ADVANCED,
 		SHADER_GROUP_MULTIVIEW,
 		SHADER_GROUP_ADVANCED_MULTIVIEW,
+		SHADER_GROUP_CAPTURE, // Light probe captures (MODE_CAPTURE), compiled once something captures.
 	};
 
 	// Not an enum because these values are constants that are processed as numbers
@@ -63,6 +64,15 @@ public:
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_MATERIAL = 7;
 		constexpr static uint16_t SHADER_VERSION_DEPTH_PASS_WITH_SDF = 8;
 		constexpr static uint16_t SHADER_VERSION_COLOR_PASS = 9;
+		// After the colour pass's versions (SHADER_VERSION_COLOR_PASS * 2 + SHADER_COLOR_PASS_FLAG_COUNT of them): the
+		// capture pass's, one for each SHADER_CAPTURE_PASS_FLAG combination.
+		constexpr static uint16_t SHADER_VERSION_CAPTURE_PASS = 9 * 2 + (1 << 5);
+	};
+
+	enum ShaderCapturePassFlags {
+		SHADER_CAPTURE_PASS_FLAG_UBERSHADER = 1 << 0,
+		SHADER_CAPTURE_PASS_FLAG_LIGHTMAP = 1 << 1,
+		SHADER_CAPTURE_PASS_FLAG_COUNT = 1 << 2
 	};
 
 	enum ShaderColorPassFlags {
@@ -85,6 +95,7 @@ public:
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_MULTIVIEW,
 		PIPELINE_VERSION_DEPTH_PASS_WITH_NORMAL_AND_ROUGHNESS_AND_VOXEL_GI_MULTIVIEW,
 		PIPELINE_VERSION_COLOR_PASS,
+		PIPELINE_VERSION_CAPTURE_PASS, // A light probe capture: a colour pass into the layers of a layered target.
 		PIPELINE_VERSION_MAX
 	};
 
@@ -229,7 +240,7 @@ public:
 
 		RID version;
 
-		static const uint32_t VERTEX_INPUT_MASKS_SIZE = ShaderVersion::SHADER_VERSION_COLOR_PASS * 2 + SHADER_COLOR_PASS_FLAG_COUNT;
+		static const uint32_t VERTEX_INPUT_MASKS_SIZE = ShaderVersion::SHADER_VERSION_CAPTURE_PASS + SHADER_CAPTURE_PASS_FLAG_COUNT;
 		std::atomic<uint64_t> vertex_input_masks[VERTEX_INPUT_MASKS_SIZE] = {};
 
 		Vector<ShaderCompiler::GeneratedCode::Texture> texture_uniforms;
@@ -371,6 +382,8 @@ public:
 	RID default_vec4_xform_buffer;
 	RID default_vec4_xform_uniform_set;
 	RID default_material_feedback_buffer;
+	// The render pass set's binding 39 when not capturing (a light probe capture binds its layers' cameras).
+	RID default_capture_layers_buffer;
 
 	RID shadow_sampler;
 
@@ -393,6 +406,8 @@ public:
 	void init(const String p_defines);
 	void set_default_specialization(const ShaderSpecialization &p_specialization);
 	void enable_multiview_shader_group();
+	void enable_capture_shader_group();
+	bool is_capture_shader_group_enabled() const;
 	void enable_advanced_shader_group(bool p_needs_multiview = false);
 	bool is_multiview_shader_group_enabled() const;
 	bool is_advanced_shader_group_enabled(bool p_multiview) const;

@@ -4,6 +4,10 @@
 
 #VERSION_DEFINES
 
+#ifdef MODE_CAPTURE
+#extension GL_ARB_shader_viewport_layer_array : require
+#endif
+
 /* Include half precision types. */
 #include "../half_inc.glsl"
 #include "scene_forward_clustered_inc.glsl"
@@ -181,6 +185,10 @@ uint cluster_get_range_clip_mask(uint i, uint z_min, uint z_max) {
 layout(location = 14) out vec2 point_coord_interp;
 #endif
 
+#ifdef MODE_CAPTURE
+layout(location = 15) out flat uint capture_layer_interp;
+#endif
+
 invariant gl_Position;
 
 #GLOBALS
@@ -241,6 +249,11 @@ void vertex_shader(vec3 vertex_input,
 			scene_data.inv_view_matrix[1],
 			scene_data.inv_view_matrix[2],
 			vec4(0.0, 0.0, 0.0, 1.0)));
+#ifdef MODE_CAPTURE
+	// The face's own camera, as a 90° camera at the probe would have it.
+	const uint capture_layer = CAPTURE_LAYER;
+	inv_view_matrix = capture_layers.data[capture_layer].inv_view_matrix;
+#endif
 
 	mat4 model_matrix = transpose(mat4(in_model_matrix[0],
 			in_model_matrix[1],
@@ -388,6 +401,10 @@ void vertex_shader(vec3 vertex_input,
 	mat4 inv_projection_matrix = scene_data.inv_projection_matrix;
 	vec3 eye_offset = vec3(0.0, 0.0, 0.0);
 #endif //USE_MULTIVIEW
+#ifdef MODE_CAPTURE
+	projection_matrix = capture_layers.data[capture_layer].projection_matrix;
+	inv_projection_matrix = capture_layers.data[capture_layer].inv_projection_matrix;
+#endif
 
 //using world coordinates
 #if !defined(SKIP_TRANSFORM_USED) && defined(VERTEX_WORLD_COORDS_USED)
@@ -416,6 +433,9 @@ void vertex_shader(vec3 vertex_input,
 			scene_data.view_matrix[1],
 			scene_data.view_matrix[2],
 			vec4(0.0, 0.0, 0.0, 1.0)));
+#ifdef MODE_CAPTURE
+	read_view_matrix = capture_layers.data[capture_layer].view_matrix;
+#endif
 
 #ifdef USE_DOUBLE_PRECISION
 	mat4 modelview = read_view_matrix * model_matrix;
@@ -531,6 +551,11 @@ void vertex_shader(vec3 vertex_input,
 
 #ifdef MOTION_VECTORS
 	screen_pos = gl_Position;
+#endif
+
+#ifdef MODE_CAPTURE
+	gl_Layer = int(capture_layer);
+	capture_layer_interp = capture_layer;
 #endif
 
 #if !defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)
@@ -973,9 +998,16 @@ layout(location = 13) in vec4 specular_light_interp;
 layout(location = 14) in vec2 point_coord_interp;
 #endif
 
+#ifdef MODE_CAPTURE
+layout(location = 15) in flat uint capture_layer_interp;
+#endif
+
 //defines to keep compatibility with vertex
 
-#ifdef USE_MULTIVIEW
+#if defined(MODE_CAPTURE)
+#define projection_matrix capture_layers.data[capture_layer_interp].projection_matrix
+#define inv_projection_matrix capture_layers.data[capture_layer_interp].inv_projection_matrix
+#elif defined(USE_MULTIVIEW)
 #define projection_matrix scene_data.projection_matrix_view[ViewIndex]
 #define inv_projection_matrix scene_data.inv_projection_matrix_view[ViewIndex]
 #else
@@ -1069,7 +1101,11 @@ vec4 fog_process(vec3 vertex) {
 
 	if (scene_data_block.data.fog_aerial_perspective > 0.0) {
 		vec3 sky_fog_color = vec3(0.0);
+#ifdef MODE_CAPTURE
+		vec3 cube_view = scene_data_block.data.radiance_inverse_xform * (mat3(capture_layers.data[capture_layer_interp].reference_from_view) * vertex);
+#else
 		vec3 cube_view = scene_data_block.data.radiance_inverse_xform * vertex;
+#endif
 		// mip_level always reads from the second mipmap and higher so the fog is always slightly blurred
 		float mip_level = mix(1.0 / MAX_ROUGHNESS_LOD, 1.0, 1.0 - (abs(vertex.z) - scene_data_block.data.z_near) / (scene_data_block.data.z_far - scene_data_block.data.z_near));
 #ifdef USE_RADIANCE_OCTMAP_ARRAY
@@ -1091,7 +1127,11 @@ vec4 fog_process(vec3 vertex) {
 	if (scene_data_block.data.fog_sun_scatter > 0.001) {
 		vec4 sun_scatter = vec4(0.0);
 		float sun_total = 0.0;
+#ifdef MODE_CAPTURE
+		vec3 view = normalize(mat3(capture_layers.data[capture_layer_interp].reference_from_view) * vertex);
+#else
 		vec3 view = normalize(vertex);
+#endif
 
 		for (uint i = 0; i < scene_data_block.data.directional_light_count; i++) {
 			vec3 light_color = directional_lights.data[i].color * directional_lights.data[i].energy;
@@ -1116,7 +1156,11 @@ vec4 fog_process(vec3 vertex) {
 				scene_data_block.data.inv_view_matrix[2],
 				vec4(0.0, 0.0, 0.0, 1.0)));
 
+#ifdef MODE_CAPTURE
+		float y = (capture_layers.data[capture_layer_interp].inv_view_matrix * vec4(vertex, 1.0)).y;
+#else
 		float y = (inv_view_matrix * vec4(vertex, 1.0)).y;
+#endif
 
 		float y_dist = y - scene_data_block.data.fog_height;
 
@@ -1277,6 +1321,10 @@ void fragment_shader(in SceneData scene_data) {
 			scene_data.inv_view_matrix[1],
 			scene_data.inv_view_matrix[2],
 			vec4(0.0, 0.0, 0.0, 1.0)));
+#ifdef MODE_CAPTURE
+	// The material's code sees its face's own camera (the seam below moves to the reference space for the lighting).
+	inv_view_matrix = capture_layers.data[capture_layer_interp].inv_view_matrix;
+#endif
 	mat4 read_model_matrix = transpose(mat4(instances.data[instance_index].transform[0],
 			instances.data[instance_index].transform[1],
 			instances.data[instance_index].transform[2],
@@ -1297,6 +1345,9 @@ void fragment_shader(in SceneData scene_data) {
 			scene_data.view_matrix[1],
 			scene_data.view_matrix[2],
 			vec4(0.0, 0.0, 0.0, 1.0)));
+#ifdef MODE_CAPTURE
+	read_view_matrix = capture_layers.data[capture_layer_interp].view_matrix;
+#endif
 	vec2 read_viewport_size = scene_data.viewport_size;
 
 #ifdef POINT_COORD_USED
@@ -1535,6 +1586,30 @@ void fragment_shader(in SceneData scene_data) {
 
 #endif //!FOG_DISABLED
 #endif //!MODE_RENDER_DEPTH
+
+#ifdef MODE_CAPTURE
+	// The seam: the material's code ran in its face's view space; the renderer's lighting below runs in the capture's
+	// reference space, for which the light, shadow, decal and reflection probe buffers and the scene data are filled.
+	// Lighting depends only on positions and directions relative to each other, so it is the same in either frame.
+	{
+		mat4 reference_from_view = capture_layers.data[capture_layer_interp].reference_from_view;
+		mat3 reference_rotation = mat3(reference_from_view);
+		vertex = (reference_from_view * vec4(vertex, 1.0)).xyz;
+		view = reference_rotation * view;
+		normal = reference_rotation * normal;
+#ifdef NORMAL_USED
+		geo_normal = reference_rotation * geo_normal;
+#endif
+		tangent = reference_rotation * tangent;
+		binormal = reference_rotation * binormal;
+#ifdef BENT_NORMAL_MAP_USED
+		bent_normal_vector = reference_rotation * bent_normal_vector;
+#endif
+		eye_offset = reference_from_view[3].xyz; // the probe, in the reference space
+		inv_view_matrix = transpose(mat4(scene_data.inv_view_matrix[0], scene_data.inv_view_matrix[1], scene_data.inv_view_matrix[2], vec4(0.0, 0.0, 0.0, 1.0)));
+		read_view_matrix = transpose(mat4(scene_data.view_matrix[0], scene_data.view_matrix[1], scene_data.view_matrix[2], vec4(0.0, 0.0, 0.0, 1.0)));
+	}
+#endif
 
 	/////////////////////// DECALS ////////////////////////////////
 
