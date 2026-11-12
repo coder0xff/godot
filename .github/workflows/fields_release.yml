@@ -1,0 +1,357 @@
+name: 🌾 Fields Release
+# Builds the release editor from fields/master (the Fields patches on upstream Godot) for Linux x86_64 and
+# Windows x86_64 and publishes both as a GitHub Release tagged fields-<YYYYMMDD>-<short sha> (the commit's
+# UTC committer date), with SHA-256 and SHA-512 checksums. Fields pins one of these releases in
+# tools/godot_pin.py.
+#
+# The build options follow the official release builds (godotengine/godot-build-scripts): production=yes
+# (use_static_cpp=yes, debug_symbols=no, LTO as each platform's detect.py prefers it: full LTO with GCC on
+# Linux, none with MSVC), without the separate debug symbols the official builds also upload.
+#  - Linux: Godot's buildroot SDK (godotengine/buildroot), GCC 13.2 against glibc 2.28, so the binary runs on
+#    older distributions (Runpod pods); the job fails if the binary needs a newer glibc symbol.
+#  - Windows: MSVC on windows-latest, as Godot's own windows_builds.yml, with its Direct3D 12, ANGLE and
+#    AccessKit SDKs.
+# It reuses the repository's own composite actions (godot-deps, godot-cache-restore/-save, upload- and
+# download-artifact) and their SCons cache.
+on:
+  push:
+    branches: [fields/master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}|${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  SCONS_FLAGS: >-
+    production=yes
+    verbose=yes
+    warnings=no
+    progress=no
+    redirect_build_objects=no
+  # Shown in the version string: <major>.<minor>.<status>.fields.<hash>.
+  BUILD_NAME: fields
+  # Godot's buildroot SDK with glibc 2.28 (and GCC 13.2). godot-2026.05.x-1, which the official 4.8 builds
+  # use, targets glibc 2.34.
+  GODOT_SDK_VERSION: godot-2023.08.x-4
+  GLIBC_MAX: "2.28"
+  PYTHONIOENCODING: utf8
+
+jobs:
+  meta:
+    name: Release name
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Tag from the commit's date and hash
+        id: tag
+        run: |
+          day=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d HEAD)
+          tag="fields-${day}-$(git rev-parse --short=7 HEAD)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${tag}"
+
+  linux:
+    name: 🐧 Linux editor (x86_64, glibc 2.28)
+    needs: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      glibc: ${{ steps.check.outputs.glibc }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-bin  # wayland-scanner, as the official build container's wayland-devel.
+
+      - name: Free disk space and add swap for the LTO link
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          if sudo fallocate -l 8G /mnt/fields-swap; then
+            sudo chmod 600 /mnt/fields-swap && sudo mkswap /mnt/fields-swap && sudo swapon /mnt/fields-swap || true
+          fi
+          df -h / /mnt || true
+          free -h
+
+      - name: Restore Godot build cache
+        uses: ./.github/actions/godot-cache-restore
+        with:
+          cache-name: fields-linux-editor
+        continue-on-error: true
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      - name: Download Godot's buildroot SDK
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/godotengine/buildroot/releases/download/${GODOT_SDK_VERSION}/x86_64-godot-linux-gnu_sdk-buildroot.tar.bz2"
+          sha256sum x86_64-godot-linux-gnu_sdk-buildroot.tar.bz2
+          tar xf x86_64-godot-linux-gnu_sdk-buildroot.tar.bz2
+          rm x86_64-godot-linux-gnu_sdk-buildroot.tar.bz2
+          cd x86_64-godot-linux-gnu_sdk-buildroot
+          ./relocate-sdk.sh
+          echo "GODOT_SDK_LINUX_X86_64=$PWD" >> "$GITHUB_ENV"
+
+      - name: Download pre-built AccessKit
+        shell: sh
+        id: accesskit-sdk
+        run: |
+          if python ./misc/scripts/install_accesskit.py; then
+            echo "ACCESSKIT_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::AccessKit SDK installation failed, building without AccessKit support."
+            echo "ACCESSKIT_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compilation
+        run: |
+          # As godot-build-scripts/build-linux/build.sh: the SDK's toolchain first on PATH.
+          export PATH="${GODOT_SDK_LINUX_X86_64}/bin:${PATH}"
+          gcc --version | head -1
+          scons platform=linuxbsd arch=x86_64 target=editor ${SCONS_FLAGS} \
+            accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }} \
+            "cache_path=${{ github.workspace }}/.scons_cache/"
+          ls -l bin/
+
+      - name: Save Godot build cache
+        uses: ./.github/actions/godot-cache-save
+        with:
+          cache-name: fields-linux-editor
+        continue-on-error: true
+
+      - name: Check the glibc requirement and the version
+        id: check
+        run: |
+          bin=bin/godot.linuxbsd.editor.x86_64
+          strip "$bin"
+          glibc=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -Vu | tail -1)
+          echo "Highest glibc symbol version: ${glibc}"
+          if [ "$(printf '%s\n%s\n' "$glibc" "$GLIBC_MAX" | sort -V | tail -1)" != "$GLIBC_MAX" ]; then
+            echo "::error::The editor needs glibc ${glibc}, newer than ${GLIBC_MAX}."
+            exit 1
+          fi
+          if objdump -p "$bin" | grep -q 'NEEDED.*libstdc++'; then
+            echo "::error::The editor links libstdc++ dynamically (expected use_static_cpp=yes)."
+            exit 1
+          fi
+          objdump -p "$bin" | grep NEEDED
+          version=$("$bin" --version | tail -1)
+          echo "Version: ${version}"
+          case "$version" in
+            *".${BUILD_NAME}.$(git rev-parse --short=9 HEAD)"*) ;;
+            *) echo "::error::Unexpected version string ${version}"; exit 1 ;;
+          esac
+          echo "glibc=${glibc}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          bin/godot.linuxbsd.editor.x86_64 --headless --help > /dev/null
+
+      - name: Package
+        run: |
+          mkdir -p out
+          cp bin/godot.linuxbsd.editor.x86_64 "out/Godot_${TAG}_linux.x86_64"
+          chmod +x "out/Godot_${TAG}_linux.x86_64"
+          cd out
+          zip -9 "Godot_${TAG}_linux.x86_64.zip" "Godot_${TAG}_linux.x86_64"
+          rm "Godot_${TAG}_linux.x86_64"
+          ls -l
+
+      - name: Upload artifact
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: fields-linux-editor
+          path: out/*.zip
+
+  windows:
+    name: 🏁 Windows editor (x86_64, MSVC)
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 330
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      SCONS_CACHE_MSVC_CONFIG: true
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Restore Godot build cache
+        uses: ./.github/actions/godot-cache-restore
+        with:
+          cache-name: fields-windows-editor
+        continue-on-error: true
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      - name: Download Direct3D 12 SDK components
+        shell: sh
+        id: d3d12-sdk
+        run: |
+          if python ./misc/scripts/install_d3d12_sdk_windows.py; then
+            echo "D3D12_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Windows: Direct3D 12 SDK installation failed, building without Direct3D 12 support."
+            echo "D3D12_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
+
+      - name: Download pre-built ANGLE
+        shell: sh
+        id: angle-sdk
+        run: |
+          if python ./misc/scripts/install_angle.py; then
+            echo "ANGLE_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::ANGLE SDK installation failed, building without ANGLE support."
+            echo "ANGLE_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download pre-built AccessKit
+        shell: sh
+        id: accesskit-sdk
+        run: |
+          if python ./misc/scripts/install_accesskit.py; then
+            echo "ACCESSKIT_ENABLED=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::AccessKit SDK installation failed, building without AccessKit support."
+            echo "ACCESSKIT_ENABLED=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compilation
+        shell: sh
+        run: |
+          scons platform=windows arch=x86_64 target=editor ${SCONS_FLAGS} \
+            d3d12=${{ steps.d3d12-sdk.outputs.D3D12_ENABLED }} \
+            angle=${{ steps.angle-sdk.outputs.ANGLE_ENABLED }} \
+            accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }} \
+            "cache_path=${{ github.workspace }}/.scons_cache/"
+          ls -l bin/
+
+      - name: Save Godot build cache
+        uses: ./.github/actions/godot-cache-save
+        with:
+          cache-name: fields-windows-editor
+        continue-on-error: true
+
+      - name: Check the version
+        id: check
+        shell: bash
+        run: |
+          version=$(./bin/godot.windows.editor.x86_64.console.exe --version | tr -d '\r' | tail -1)
+          echo "Version: ${version}"
+          case "$version" in
+            *".${BUILD_NAME}.$(git rev-parse --short=9 HEAD)"*) ;;
+            *) echo "::error::Unexpected version string ${version}"; exit 1 ;;
+          esac
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        shell: bash
+        run: |
+          rm -rf bin/build_deps
+          rm -f bin/*.exp bin/*.lib bin/*.pdb
+          mkdir -p out
+          cp bin/godot.windows.editor.x86_64.exe "out/Godot_${TAG}_win64.exe"
+          cp bin/godot.windows.editor.x86_64.console.exe "out/Godot_${TAG}_win64_console.exe"
+          # Any DLL the build placed beside the editor (the Direct3D 12 Agility SDK, when installed).
+          for f in bin/*.dll; do [ -e "$f" ] && cp "$f" out/; done
+          cd out
+          7z a -tzip -mx=9 "Godot_${TAG}_win64.exe.zip" ./*
+          find . -maxdepth 1 -type f ! -name '*.zip' -delete
+          ls -l
+
+      - name: Upload artifact
+        uses: ./.github/actions/upload-artifact
+        with:
+          name: fields-windows-editor
+          path: out/*.zip
+
+  release:
+    name: 📦 GitHub Release
+    needs: [meta, linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the Linux editor
+        uses: ./.github/actions/download-artifact
+        with:
+          name: fields-linux-editor
+          path: dist
+
+      - name: Download the Windows editor
+        uses: ./.github/actions/download-artifact
+        with:
+          name: fields-windows-editor
+          path: dist
+
+      - name: Source tarball
+        run: |
+          # The official source tarball's form (with .git/HEAD, so a build from it carries the hash), for
+          # building the matching export templates.
+          sh misc/scripts/make_tarball.sh -v "${TAG}" -g HEAD
+          mv "../godot-${TAG}.tar.gz" dist/
+
+      - name: Checksums and notes
+        run: |
+          cd dist
+          sha256sum -- * > ../SHA256SUMS.txt
+          sha512sum -- * > ../SHA512-SUMS.txt
+          mv ../SHA256SUMS.txt ../SHA512-SUMS.txt .
+          cat SHA256SUMS.txt
+          {
+            echo "Godot editor built from \`fields/master\` at ${GITHUB_SHA} (upstream Godot plus the Fields patches)."
+            echo
+            echo "- Version string: \`${{ needs.linux.outputs.version }}\` (Linux), \`${{ needs.windows.outputs.version }}\` (Windows)"
+            echo "- Build: \`target=editor ${SCONS_FLAGS}\`, \`BUILD_NAME=${BUILD_NAME}\`"
+            echo "- Linux x86_64: Godot buildroot SDK \`${GODOT_SDK_VERSION}\` (GCC 13.2, glibc 2.28); the binary needs glibc ${{ needs.linux.outputs.glibc }} or newer."
+            echo "- Windows x86_64: MSVC on \`windows-latest\` (as upstream's windows_builds.yml), with Direct3D 12, ANGLE and AccessKit."
+            echo "- Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "### SHA-256"
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+          } > ../notes.md
+          cat ../notes.md
+
+      - name: Publish
+        run: |
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+            gh release edit "${TAG}" --notes-file notes.md
+          else
+            gh release create "${TAG}" dist/* --target "${GITHUB_SHA}" --title "${TAG}" --notes-file notes.md
+          fi
+          gh release view "${TAG}"

@@ -1,5 +1,13 @@
 name: 🔗 GHA
-on: [push, pull_request, merge_group, workflow_dispatch]
+# Fields fork: skip the upstream checks on pushes and pull requests to the fork's own fields/* branches
+# (fields_release.yml builds fields/master); run them on demand with workflow_dispatch.
+on:
+  push:
+    branches-ignore: ["fields/**"]
+  pull_request:
+    branches-ignore: ["fields/**"]
+  merge_group:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}|${{ github.ref_name }}
