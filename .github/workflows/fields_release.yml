@@ -122,10 +122,12 @@ jobs:
 
       - name: Compilation
         run: |
-          # As godot-build-scripts/build-linux/build.sh: the SDK's toolchain first on PATH.
+          # As godot-build-scripts/build-linux/build.sh: the SDK's toolchain first on PATH. The SDK's bin also
+          # holds its own python3 and scons (without zstandard), so SCons runs from the setup-python interpreter.
+          py="$(command -v python)"
           export PATH="${GODOT_SDK_LINUX_X86_64}/bin:${PATH}"
           gcc --version | head -1
-          scons platform=linuxbsd arch=x86_64 target=editor ${SCONS_FLAGS} \
+          "$py" -m SCons platform=linuxbsd arch=x86_64 target=editor ${SCONS_FLAGS} \
             accesskit=${{ steps.accesskit-sdk.outputs.ACCESSKIT_ENABLED }} \
             "cache_path=${{ github.workspace }}/.scons_cache/"
           ls -l bin/
