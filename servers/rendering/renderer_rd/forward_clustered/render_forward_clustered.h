@@ -222,8 +222,9 @@ private:
 		LocalVector<uint32_t> draw_data;
 		LocalVector<uint32_t> command_data;
 	} capture_cull;
-	// Culls the opaque list's elements against the capture's layers into capture_cull's buffers. Returns whether it ran.
-	bool _capture_cull(const RenderDataRD *p_render_data, uint32_t p_color_pass_flags);
+	// Culls a render list's elements against the capture's layers into capture_cull's buffers. Returns whether it ran.
+	// p_ordered (a transparent list): every pair keeps its slot, so a run of equal elements blends in its sorted order.
+	bool _capture_cull(const RenderDataRD *p_render_data, RenderListType p_list, uint32_t p_color_pass_flags, bool p_ordered);
 
 	RID _setup_render_pass_uniform_set(RenderListType p_render_list, const RenderDataRD *p_render_data, bool p_is_multiview, RID p_radiance_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index, bool p_use_directional_shadow_atlas = false);
 

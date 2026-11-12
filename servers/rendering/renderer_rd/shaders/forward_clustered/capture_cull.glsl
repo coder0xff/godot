@@ -19,8 +19,13 @@ struct Draw {
 	uint item_offset;
 	uint pair_count;
 	uint instances;
-	uint emulated_points; // 1: point sizes emulated, six procedural vertices an instance
+	// Bit 0: point sizes emulated (six procedural vertices an instance). Bit 1: ordered (a transparent list): every
+	// pair keeps its slot, element by element, a culled one marked by its layer CULLED, so a run of equal elements
+	// still blends in its sorted order; pair_count is then every pair's.
+	uint flags;
 };
+
+#define CULLED 0xFFFFFFFFu
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer Elements {
 	Element data[];
@@ -66,22 +71,28 @@ void main() {
 	uint e = id / params.layer_count;
 	uint l = id % params.layer_count;
 	Element element = elements.data[e];
+	bool inside = true;
 	for (uint p = 0; p < 6; p++) {
 		vec4 plane = planes.data[l * 6 + p];
 		// The box's nearest point along the plane's outward normal: outside if even that is.
 		if (dot(plane.xyz, element.center.xyz) - plane.w - dot(abs(plane.xyz), element.half_extent.xyz) > 0.0) {
-			return;
+			inside = false;
+			break;
 		}
 	}
 	uint d = element.info.x;
-	uint slot = atomicAdd(draws.data[d].pair_count, 1u);
-	items.data[draws.data[d].item_offset + slot] = uvec2(element.info.y, l);
+	if ((draws.data[d].flags & 2u) != 0u) {
+		items.data[draws.data[d].item_offset + element.info.y * params.layer_count + l] = uvec2(element.info.y, inside ? l : CULLED);
+	} else if (inside) {
+		uint slot = atomicAdd(draws.data[d].pair_count, 1u);
+		items.data[draws.data[d].item_offset + slot] = uvec2(element.info.y, l);
+	}
 #endif
 #ifdef MODE_COUNT
 	if (id >= params.draw_count) {
 		return;
 	}
-	if (draws.data[id].emulated_points != 0) {
+	if ((draws.data[id].flags & 1u) != 0u) {
 		// A quad (six vertices) a drawn instance; the mesh's points are the instances (filled on the CPU).
 		commands.data[id * 5] = draws.data[id].pair_count * draws.data[id].instances * 6;
 	} else {

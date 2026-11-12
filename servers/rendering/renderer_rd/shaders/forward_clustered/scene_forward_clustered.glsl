@@ -251,7 +251,8 @@ void vertex_shader(vec3 vertex_input,
 			vec4(0.0, 0.0, 0.0, 1.0)));
 #ifdef MODE_CAPTURE
 	// The face's own camera, as a 90° camera at the probe would have it.
-	const uint capture_layer = CAPTURE_LAYER;
+	const uint capture_layer_drawn = CAPTURE_LAYER;
+	const uint capture_layer = capture_layer_drawn == CAPTURE_LAYER_CULLED ? 0u : capture_layer_drawn;
 	inv_view_matrix = capture_layers.data[capture_layer].inv_view_matrix;
 #endif
 
@@ -556,6 +557,9 @@ void vertex_shader(vec3 vertex_input,
 #ifdef MODE_CAPTURE
 	gl_Layer = int(capture_layer);
 	capture_layer_interp = capture_layer;
+	if (capture_layer_drawn == CAPTURE_LAYER_CULLED) {
+		gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // Outside every clip plane: the triangle is not drawn.
+	}
 #endif
 
 #if !defined(MODE_RENDER_DEPTH) && !defined(MODE_UNSHADED) && defined(USE_VERTEX_LIGHTING)

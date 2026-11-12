@@ -209,8 +209,11 @@ struct CaptureDraw {
 	uint item_offset; // the draw's first pair in capture_items
 	uint pair_count; // its pairs
 	uint instances; // instances a pair stands for: a multimesh's or particles' count, else 1
-	uint emulated_points;
+	uint flags; // capture_cull.glsl's
 };
+
+// A pair the cull dropped in an ordered (transparent) draw: its vertices are put outside the clip volume.
+#define CAPTURE_LAYER_CULLED 0xFFFFFFFFu
 
 layout(set = 1, binding = 40, std430) restrict readonly buffer CaptureDraws {
 	CaptureDraw data[];
