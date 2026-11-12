@@ -206,6 +206,8 @@ public:
 			uint32_t ubershader = false;
 			// The opaque pass of a render whose depth pre-pass was skipped: it tests and writes depth itself.
 			uint32_t depth_pre_pass_skipped = false;
+			// The subpass of a multipass framebuffer the pipeline draws in (a face of a capture render).
+			uint32_t render_pass = 0;
 
 			uint32_t hash() const {
 				uint32_t h = hash_murmur3_one_64(vertex_format_id);
@@ -220,6 +222,7 @@ public:
 				h = hash_murmur3_one_32(wireframe, h);
 				h = hash_murmur3_one_32(ubershader, h);
 				h = hash_murmur3_one_32(depth_pre_pass_skipped, h);
+				h = hash_murmur3_one_32(render_pass, h);
 				return hash_fmix32(h);
 			}
 		};
