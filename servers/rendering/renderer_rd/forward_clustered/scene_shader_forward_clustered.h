@@ -384,6 +384,8 @@ public:
 	RID default_material_feedback_buffer;
 	// The render pass set's binding 39 when not capturing (a light probe capture binds its layers' cameras).
 	RID default_capture_layers_buffer;
+	RID default_capture_draws_buffer; // binding 40
+	RID default_capture_items_buffer; // binding 41
 
 	RID shadow_sampler;
 

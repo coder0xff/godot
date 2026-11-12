@@ -633,6 +633,10 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 				push_constant.multimesh_motion_vectors_current_offset = 0;
 				push_constant.multimesh_motion_vectors_previous_offset = 0;
 			}
+			if (p_params->capture_draw_index) {
+				// The capture variant has no motion vectors: the previous offset is its draw in the capture cull's buffers.
+				push_constant.multimesh_motion_vectors_previous_offset = p_params->capture_draw_index[i];
+			}
 
 			size_t push_constant_size = 0;
 			if (pipeline_key.ubershader) {
@@ -653,19 +657,14 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 			bool indirect = bool(surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT);
 
-			bool capture_skipped = false;
 			if (p_params->capture_layer_count > 0) {
-				// The capture variant draws each instance once for each layer (its INSTANCE_INDEX the draw's instance
-				// over the layer count).
-				if (indirect || emulate_point_size) {
-					WARN_PRINT_ONCE("Indirect multimeshes and emulated point sizes are not drawn in a capture pass yet.");
-					capture_skipped = true;
+				// The capture pass: the draw's pairs that passed the cull (capture_cull.glsl), by its indirect command;
+				// an indirect multimesh's instance count was copied from its own command on the GPU.
+				if (emulate_point_size) {
+					WARN_PRINT_ONCE("Emulated point sizes are not drawn in a capture pass yet.");
+				} else if (p_params->capture_draw_index && p_params->capture_draw_index[i] != UINT32_MAX) {
+					RD::get_singleton()->draw_list_draw_indirect(draw_list, index_array_rd.is_valid(), p_params->capture_commands, p_params->capture_draw_index[i] * 5 * sizeof(uint32_t), 1, 5 * sizeof(uint32_t));
 				}
-				instance_count *= p_params->capture_layer_count;
-			}
-
-			if (capture_skipped) {
-				// Not drawn.
 			} else if (emulate_point_size) {
 				if (indirect) {
 					WARN_PRINT("Indirect draws are not supported when emulating point size.");
@@ -1875,6 +1874,176 @@ bool RenderForwardClustered::_fill_capture_layers(const RenderDataRD *p_render_d
 	return true;
 }
 
+static void _capture_cull_buffer(RID &r_buffer, uint32_t &r_size, uint32_t p_needed, BitField<RD::StorageBufferUsage> p_usage = 0) {
+	if (r_buffer.is_valid() && r_size >= p_needed) {
+		return;
+	}
+	if (r_buffer.is_valid()) {
+		RD::get_singleton()->free_rid(r_buffer);
+	}
+	r_size = MAX(Math::next_power_of_2(MAX(p_needed, 16u)), 256u);
+	r_buffer = RD::get_singleton()->storage_buffer_create(r_size, Vector<uint8_t>(), p_usage);
+}
+
+bool RenderForwardClustered::_capture_cull(const RenderDataRD *p_render_data, uint32_t p_color_pass_flags) {
+	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
+	const RenderSceneDataRD *scene_data = p_render_data->scene_data;
+	const RenderList &list = render_list[RENDER_LIST_OPAQUE];
+	const uint32_t layers = scene_data->view_count;
+	CaptureCull &cc = capture_cull;
+
+	if (cc.version.is_null()) {
+		Vector<String> modes;
+		modes.push_back("\n#define MODE_CULL\n");
+		modes.push_back("\n#define MODE_COUNT\n");
+		cc.shader.initialize(modes);
+		cc.version = cc.shader.version_create();
+		cc.pipeline_cull = RD::get_singleton()->compute_pipeline_create(cc.shader.version_get_shader(cc.version, 0));
+		cc.pipeline_count = RD::get_singleton()->compute_pipeline_create(cc.shader.version_get_shader(cc.version, 1));
+	}
+
+	// The draws as _render_list_template issues them: a run of equal elements, or one element's instances.
+	cc.draw_of_element.resize(list.elements.size());
+	cc.element_data.clear();
+	cc.draw_data.clear();
+	cc.command_data.clear();
+	struct IndirectCopy {
+		RID buffer;
+		uint32_t offset;
+		uint32_t draw;
+	};
+	thread_local LocalVector<IndirectCopy> indirect_copies;
+	indirect_copies.clear();
+	uint32_t items = 0;
+	uint32_t elements = 0;
+	for (uint32_t i = 0; i < list.elements.size(); i++) {
+		cc.draw_of_element[i] = UINT32_MAX;
+	}
+	for (uint32_t i = 0; i < list.elements.size();) {
+		const GeometryInstanceSurfaceDataCache *surf = list.elements[i];
+		const RenderElementInfo &info = list.element_info[i];
+		if ((surf->color_pass_inclusion_mask && (p_color_pass_flags & surf->color_pass_inclusion_mask) == 0) || surf->owner->instance_count == 0) {
+			i++; // As the template: skipped, and the next element is looked at on its own.
+			continue;
+		}
+		const uint32_t draw = cc.draw_data.size() / 4;
+		const uint32_t repeat = MAX(info.repeat, 1u);
+		cc.draw_of_element[i] = draw;
+		const bool many = surf->owner->instance_count > 1;
+		uint32_t instances = 1;
+		if (many) {
+			instances = surf->owner->instance_count;
+			if (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_PARTICLE_TRAILS) {
+				instances /= surf->owner->trail_steps;
+			}
+		}
+		const uint32_t run = many ? 1 : repeat;
+		for (uint32_t k = 0; k < run; k++) {
+			const AABB &aabb = list.elements[i + k]->owner->transformed_aabb;
+			const Vector3 c = aabb.get_center();
+			const Vector3 h = aabb.size * 0.5;
+			const float e[12] = { float(c.x), float(c.y), float(c.z), 0.0f, float(h.x), float(h.y), float(h.z), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+			const uint32_t ids[4] = { draw, k, 0, 0 };
+			const uint32_t base = cc.element_data.size();
+			cc.element_data.resize(base + 12);
+			memcpy(cc.element_data.ptr() + base, e, sizeof(float) * 8);
+			memcpy(cc.element_data.ptr() + base + 8, ids, sizeof(ids));
+			elements++;
+		}
+		cc.draw_data.push_back(items);
+		cc.draw_data.push_back(0); // pairs: counted by the cull
+		cc.draw_data.push_back(instances);
+		cc.draw_data.push_back(0);
+		items += run * layers;
+		const uint32_t count = mesh_storage->mesh_surface_get_draw_count(surf->surface, info.lod_index);
+		cc.command_data.push_back(count);
+		cc.command_data.push_back(0); // instances: written by the count pass
+		cc.command_data.push_back(0);
+		cc.command_data.push_back(0);
+		cc.command_data.push_back(0);
+		if (surf->owner->base_flags & INSTANCE_DATA_FLAG_MULTIMESH_INDIRECT) {
+			indirect_copies.push_back({ mesh_storage->_multimesh_get_command_buffer_rd_rid(surf->owner->data->base), surf->surface_index * uint32_t(sizeof(uint32_t)) * RendererRD::MeshStorage::INDIRECT_MULTIMESH_COMMAND_STRIDE + uint32_t(sizeof(uint32_t)), draw });
+		}
+		i += many ? repeat : run;
+	}
+	const uint32_t draws = cc.draw_data.size() / 4;
+	if (draws == 0) {
+		return false;
+	}
+
+	// Each layer's frustum in the world: the face's camera and its own projection.
+	cc.plane_data.resize(layers * 6 * 4);
+	for (uint32_t v = 0; v < layers; v++) {
+		const Transform3D &offset = scene_data->view_offset[v];
+		const Projection projection = scene_data->view_projection[v] * Projection(offset);
+		const Vector<Plane> planes = projection.get_projection_planes(scene_data->cam_transform * offset);
+		ERR_FAIL_COND_V(planes.size() != 6, false);
+		for (int p = 0; p < 6; p++) {
+			float *f = cc.plane_data.ptr() + (v * 6 + p) * 4;
+			f[0] = planes[p].normal.x;
+			f[1] = planes[p].normal.y;
+			f[2] = planes[p].normal.z;
+			f[3] = planes[p].d;
+		}
+	}
+
+	_capture_cull_buffer(cc.elements, cc.elements_size, cc.element_data.size() * sizeof(float));
+	_capture_cull_buffer(cc.planes, cc.planes_size, cc.plane_data.size() * sizeof(float));
+	_capture_cull_buffer(cc.draws, cc.draws_size, cc.draw_data.size() * sizeof(uint32_t));
+	_capture_cull_buffer(cc.items, cc.items_size, items * 2 * sizeof(uint32_t));
+	_capture_cull_buffer(cc.commands, cc.commands_size, cc.command_data.size() * sizeof(uint32_t), RD::STORAGE_BUFFER_USAGE_DISPATCH_INDIRECT);
+
+	RD *rd = RD::get_singleton();
+	rd->buffer_update(cc.elements, 0, cc.element_data.size() * sizeof(float), cc.element_data.ptr());
+	rd->buffer_update(cc.planes, 0, cc.plane_data.size() * sizeof(float), cc.plane_data.ptr());
+	rd->buffer_update(cc.draws, 0, cc.draw_data.size() * sizeof(uint32_t), cc.draw_data.ptr());
+	rd->buffer_update(cc.commands, 0, cc.command_data.size() * sizeof(uint32_t), cc.command_data.ptr());
+	for (const IndirectCopy &copy : indirect_copies) {
+		// The multimesh's visible instances, as its own indirect command holds them.
+		rd->buffer_copy(copy.buffer, cc.draws, copy.offset, copy.draw * 4 * sizeof(uint32_t) + 2 * sizeof(uint32_t), sizeof(uint32_t));
+	}
+
+	RID shader = cc.shader.version_get_shader(cc.version, 0);
+	thread_local LocalVector<RD::Uniform> uniforms;
+	uniforms.clear();
+	const RID buffers[5] = { cc.elements, cc.planes, cc.draws, cc.items, cc.commands };
+	for (uint32_t b = 0; b < 5; b++) {
+		RD::Uniform u;
+		u.binding = b;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(buffers[b]);
+		uniforms.push_back(u);
+	}
+	RID uniform_set = UniformSetCacheRD::get_singleton()->get_cache_vec(shader, 0, uniforms);
+
+	const uint32_t params[4] = { elements, layers, draws, 0 };
+	RD::ComputeListID compute_list = rd->compute_list_begin();
+	rd->compute_list_bind_compute_pipeline(compute_list, cc.pipeline_cull);
+	rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+	rd->compute_list_set_push_constant(compute_list, params, sizeof(params));
+	rd->compute_list_dispatch_threads(compute_list, elements * layers, 1, 1);
+	rd->compute_list_add_barrier(compute_list);
+	rd->compute_list_bind_compute_pipeline(compute_list, cc.pipeline_count);
+	rd->compute_list_bind_uniform_set(compute_list, uniform_set, 0);
+	rd->compute_list_set_push_constant(compute_list, params, sizeof(params));
+	rd->compute_list_dispatch_threads(compute_list, draws, 1, 1);
+	rd->compute_list_end();
+
+	if (GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass_stats")) {
+		// Debugging and tests: what the cull kept (reads the draws back, so it waits for the GPU).
+		const Vector<uint8_t> back = rd->buffer_get_data(cc.draws, 0, draws * 4 * sizeof(uint32_t));
+		const uint32_t *d = reinterpret_cast<const uint32_t *>(back.ptr());
+		uint64_t pairs = 0;
+		uint64_t instances = 0;
+		for (uint32_t k = 0; k < draws; k++) {
+			pairs += d[k * 4 + 1];
+			instances += uint64_t(d[k * 4 + 1]) * d[k * 4 + 2];
+		}
+		print_line(vformat("Capture pass: %d draws, %d elements over %d layers: %d of %d (element, layer) pairs drawn, %d instances drawn.", draws, elements, layers, pairs, uint64_t(elements) * layers, instances));
+	}
+	return true;
+}
+
 void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Color &p_default_bg_color) {
 	scene_state.used_uniform_buffer_count = 0;
 
@@ -2408,7 +2577,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	// The capture pass (rendering/multiview/capture_pass), where face passes could be drawn: one pass into every view's
 	// layer through each material's capture variant, with its own single-view render pass set.
-	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data);
+	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data) && _capture_cull(p_render_data, color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW));
 	RID capture_rp_uniform_set;
 	if (capture_pass) {
 		capture_render_pass = true;
@@ -2452,6 +2621,8 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				capture_params.view_count = 1;
 				capture_params.render_pass_uniform_set = capture_rp_uniform_set;
 				capture_params.capture_layer_count = p_render_data->scene_data->view_count;
+				capture_params.capture_draw_index = capture_cull.draw_of_element.ptr();
+				capture_params.capture_commands = capture_cull.commands;
 				_render_list_with_draw_list(&capture_params, rb_data->get_color_pass_layered_fb(), RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, capture_clear, 0.0f, 0u, p_render_data->render_region);
 			} else if (face_passes) {
 				Vector<Color> face_clear;
@@ -4126,7 +4297,21 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		RD::Uniform u;
 		u.binding = 39;
 		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
-		u.append_id(capture_layers_buffer.is_valid() ? capture_layers_buffer : scene_shader.default_capture_layers_buffer);
+		u.append_id(capture_render_pass && capture_layers_buffer.is_valid() ? capture_layers_buffer : scene_shader.default_capture_layers_buffer);
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u;
+		u.binding = 40;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(capture_render_pass && capture_cull.draws.is_valid() ? capture_cull.draws : scene_shader.default_capture_draws_buffer);
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u;
+		u.binding = 41;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(capture_render_pass && capture_cull.items.is_valid() ? capture_cull.items : scene_shader.default_capture_items_buffer);
 		uniforms.push_back(u);
 	}
 
@@ -4348,6 +4533,20 @@ RID RenderForwardClustered::_setup_sdfgi_render_pass_uniform_set(RID p_albedo_te
 		u.binding = 39;
 		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
 		u.append_id(scene_shader.default_capture_layers_buffer);
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u;
+		u.binding = 40;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(scene_shader.default_capture_draws_buffer);
+		uniforms.push_back(u);
+	}
+	{
+		RD::Uniform u;
+		u.binding = 41;
+		u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+		u.append_id(scene_shader.default_capture_items_buffer);
 		uniforms.push_back(u);
 	}
 
@@ -5644,6 +5843,19 @@ RenderForwardClustered::RenderForwardClustered() {
 RenderForwardClustered::~RenderForwardClustered() {
 	if (capture_layers_buffer.is_valid()) {
 		RD::get_singleton()->free_rid(capture_layers_buffer);
+	}
+	{
+		const RID cull_buffers[5] = { capture_cull.elements, capture_cull.planes, capture_cull.draws, capture_cull.items, capture_cull.commands };
+		for (const RID &b : cull_buffers) {
+			if (b.is_valid()) {
+				RD::get_singleton()->free_rid(b);
+			}
+		}
+		if (capture_cull.version.is_valid()) {
+			RD::get_singleton()->free_rid(capture_cull.pipeline_cull);
+			RD::get_singleton()->free_rid(capture_cull.pipeline_count);
+			capture_cull.shader.version_free(capture_cull.version);
+		}
 	}
 
 	if (ss_effects != nullptr) {

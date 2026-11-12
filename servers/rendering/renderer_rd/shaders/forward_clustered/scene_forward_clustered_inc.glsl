@@ -196,24 +196,56 @@ struct CaptureLayer {
 };
 
 layout(set = 1, binding = 39, std430) restrict readonly buffer CaptureLayers {
-	uint layer_count; // layers a draw instance is repeated over (until per-face lists, every layer)
-	uint layer_base;
+	uint layer_count;
 	uint pad0;
 	uint pad1;
+	uint pad2;
 	CaptureLayer data[];
 }
 capture_layers;
 
-// The draw's instances are (instance, layer) pairs: the instance part and the layer.
-#define CAPTURE_LAYER (capture_layers.layer_base + uint(gl_InstanceIndex) % capture_layers.layer_count)
+// The capture pass's draws (capture_cull.glsl): each draw's (instance, layer) pairs that passed the cull, compacted.
+struct CaptureDraw {
+	uint item_offset; // the draw's first pair in capture_items
+	uint pair_count; // its pairs
+	uint instances; // instances a pair stands for: a multimesh's or particles' count, else 1
+	uint pad;
+};
+
+layout(set = 1, binding = 40, std430) restrict readonly buffer CaptureDraws {
+	CaptureDraw data[];
+}
+capture_draws;
+
+// A pair: the element in the draw's run of equal elements (its instance index), and the layer.
+layout(set = 1, binding = 41, std430) restrict readonly buffer CaptureItems {
+	uvec2 data[];
+}
+capture_items;
+
+// The draw's index in capture_draws is in the push constant's previous multimesh offset (motion vectors are not
+// drawn in a capture). The draw's instances: pair (gl_InstanceIndex mod pairs), and for a multimesh its instance
+// (gl_InstanceIndex / pairs).
+#define CAPTURE_DRAW capture_draws.data[draw_call.multimesh_motion_vectors_previous_offset]
+#define CAPTURE_PAIRS max(CAPTURE_DRAW.pair_count, 1u)
+#define CAPTURE_ITEM capture_items.data[CAPTURE_DRAW.item_offset + uint(gl_InstanceIndex) % CAPTURE_PAIRS]
+#define CAPTURE_LAYER (CAPTURE_ITEM.y)
 #undef INSTANCE_INDEX
-#define INSTANCE_INDEX (uint(gl_InstanceIndex) / capture_layers.layer_count)
+#define INSTANCE_INDEX (CAPTURE_ITEM.x + uint(gl_InstanceIndex) / CAPTURE_PAIRS)
 #else
-// Declared in every variant, so the render pass's uniform set is the same for all (a small buffer when not capturing).
+// Declared in every variant, so the render pass's uniform set is the same for all (small buffers when not capturing).
 layout(set = 1, binding = 39, std430) restrict readonly buffer CaptureLayers {
 	uint layer_count;
 }
 capture_layers;
+layout(set = 1, binding = 40, std430) restrict readonly buffer CaptureDraws {
+	uvec4 data[];
+}
+capture_draws;
+layout(set = 1, binding = 41, std430) restrict readonly buffer CaptureItems {
+	uvec2 data[];
+}
+capture_items;
 #endif
 
 #define REFLECTION_MULTIPLIER 1.0

@@ -41,6 +41,7 @@
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/integrate_dfg.glsl.gen.h"
+#include "servers/rendering/renderer_rd/shaders/forward_clustered/capture_cull.glsl.gen.h"
 
 #ifdef METAL_ENABLED
 #include "servers/rendering/renderer_rd/effects/metal_fx.h"
@@ -194,6 +195,33 @@ private:
 	// the probe; the camera's own space is the capture's reference space). Returns whether the buffer was filled.
 	bool _fill_capture_layers(const RenderDataRD *p_render_data);
 
+	// The capture pass's cull (capture_cull.glsl): each opaque element against each layer's frustum on the GPU, the
+	// pairs that pass compacted by draw, and each draw's indirect command. A draw is a run of equal elements (or one
+	// multimesh's or particles' instances) as the render list draws it.
+	struct CaptureCull {
+		CaptureCullShaderRD shader;
+		RID version;
+		RID pipeline_cull;
+		RID pipeline_count;
+		RID elements; // per element: world bounds, its draw and its index in the draw's run
+		RID planes; // per layer: six world-space planes
+		RID draws; // per draw: its pairs' offset and count, its instances a pair
+		RID items; // the pairs
+		RID commands; // per draw: an indirect command
+		uint32_t elements_size = 0;
+		uint32_t planes_size = 0;
+		uint32_t draws_size = 0;
+		uint32_t items_size = 0;
+		uint32_t commands_size = 0;
+		LocalVector<uint32_t> draw_of_element; // each list element's draw (a run's first), else UINT32_MAX
+		LocalVector<float> element_data;
+		LocalVector<float> plane_data;
+		LocalVector<uint32_t> draw_data;
+		LocalVector<uint32_t> command_data;
+	} capture_cull;
+	// Culls the opaque list's elements against the capture's layers into capture_cull's buffers. Returns whether it ran.
+	bool _capture_cull(const RenderDataRD *p_render_data, uint32_t p_color_pass_flags);
+
 	RID _setup_render_pass_uniform_set(RenderListType p_render_list, const RenderDataRD *p_render_data, bool p_is_multiview, RID p_radiance_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index, bool p_use_directional_shadow_atlas = false);
 
 	struct BestFitNormal {
@@ -263,6 +291,10 @@ private:
 		// Past 0, the capture pass: every draw's instances drawn once for each of this many layers, with the capture
 		// variant of each material's shader, into a layered framebuffer.
 		uint32_t capture_layer_count = 0;
+		// With capture_layer_count: each element's draw in the capture cull's buffers (a run's first element), and the
+		// buffer of the draws' indirect commands.
+		const uint32_t *capture_draw_index = nullptr;
+		RID capture_commands;
 
 		RenderListParameters(GeometryInstanceSurfaceDataCache **p_elements, RenderElementInfo *p_element_info, int p_element_count, bool p_reverse_cull, PassMode p_pass_mode, uint32_t p_color_pass_flags, bool p_no_gi, bool p_use_directional_soft_shadows, RID p_render_pass_uniform_set, bool p_force_wireframe = false, const Vector2 &p_uv_offset = Vector2(), float p_lod_distance_multiplier = 0.0, float p_screen_mesh_lod_threshold = 0.0, uint32_t p_view_count = 1, uint32_t p_element_offset = 0, SceneShaderForwardClustered::ShaderSpecialization p_base_specialization = {}, bool p_use_material_feedback = false) {
 			elements = p_elements;
