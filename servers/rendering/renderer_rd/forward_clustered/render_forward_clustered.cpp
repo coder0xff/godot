@@ -660,9 +660,8 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 			if (p_params->capture_layer_count > 0) {
 				// The capture pass: the draw's pairs that passed the cull (capture_cull.glsl), by its indirect command;
 				// an indirect multimesh's instance count was copied from its own command on the GPU.
-				if (emulate_point_size) {
-					WARN_PRINT_ONCE("Emulated point sizes are not drawn in a capture pass yet.");
-				} else if (p_params->capture_draw_index && p_params->capture_draw_index[i] != UINT32_MAX) {
+				// Emulated point sizes draw no indices (index_array_rd is null), as outside a capture.
+				if (p_params->capture_draw_index && p_params->capture_draw_index[i] != UINT32_MAX) {
 					RD::get_singleton()->draw_list_draw_indirect(draw_list, index_array_rd.is_valid(), p_params->capture_commands, p_params->capture_draw_index[i] * 5 * sizeof(uint32_t), 1, 5 * sizeof(uint32_t));
 				}
 			} else if (emulate_point_size) {
@@ -1950,14 +1949,20 @@ bool RenderForwardClustered::_capture_cull(const RenderDataRD *p_render_data, ui
 			memcpy(cc.element_data.ptr() + base + 8, ids, sizeof(ids));
 			elements++;
 		}
+		// As the template draws emulated point sizes: one instance a point, six procedural vertices a drawn instance.
+		const bool emulated_points = surf->shader && surf->shader->uses_point_size && scene_shader.emulate_point_size;
 		cc.draw_data.push_back(items);
 		cc.draw_data.push_back(0); // pairs: counted by the cull
 		cc.draw_data.push_back(instances);
-		cc.draw_data.push_back(0);
+		cc.draw_data.push_back(emulated_points ? 1 : 0);
 		items += run * layers;
-		const uint32_t count = mesh_storage->mesh_surface_get_draw_count(surf->surface, info.lod_index);
-		cc.command_data.push_back(count);
-		cc.command_data.push_back(0); // instances: written by the count pass
+		if (emulated_points) {
+			cc.command_data.push_back(0); // vertices: written by the count pass
+			cc.command_data.push_back(mesh_storage->mesh_surface_get_vertex_count(surf->surface));
+		} else {
+			cc.command_data.push_back(mesh_storage->mesh_surface_get_draw_count(surf->surface, info.lod_index));
+			cc.command_data.push_back(0); // instances: written by the count pass
+		}
 		cc.command_data.push_back(0);
 		cc.command_data.push_back(0);
 		cc.command_data.push_back(0);

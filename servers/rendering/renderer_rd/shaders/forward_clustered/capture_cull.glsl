@@ -19,7 +19,7 @@ struct Draw {
 	uint item_offset;
 	uint pair_count;
 	uint instances;
-	uint pad;
+	uint emulated_points; // 1: point sizes emulated, six procedural vertices an instance
 };
 
 layout(set = 0, binding = 0, std430) restrict readonly buffer Elements {
@@ -43,7 +43,7 @@ layout(set = 0, binding = 3, std430) restrict writeonly buffer Items {
 }
 items;
 
-// The indirect commands, five uints a draw; the second is the instance count.
+// The indirect commands, five uints a draw; the second is the instance count (with emulated points, the first is).
 layout(set = 0, binding = 4, std430) restrict buffer Commands {
 	uint data[];
 }
@@ -81,6 +81,11 @@ void main() {
 	if (id >= params.draw_count) {
 		return;
 	}
-	commands.data[id * 5 + 1] = draws.data[id].pair_count * draws.data[id].instances;
+	if (draws.data[id].emulated_points != 0) {
+		// A quad (six vertices) a drawn instance; the mesh's points are the instances (filled on the CPU).
+		commands.data[id * 5] = draws.data[id].pair_count * draws.data[id].instances * 6;
+	} else {
+		commands.data[id * 5 + 1] = draws.data[id].pair_count * draws.data[id].instances;
+	}
 #endif
 }

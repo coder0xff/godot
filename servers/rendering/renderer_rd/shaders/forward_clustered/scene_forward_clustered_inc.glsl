@@ -209,7 +209,7 @@ struct CaptureDraw {
 	uint item_offset; // the draw's first pair in capture_items
 	uint pair_count; // its pairs
 	uint instances; // instances a pair stands for: a multimesh's or particles' count, else 1
-	uint pad;
+	uint emulated_points;
 };
 
 layout(set = 1, binding = 40, std430) restrict readonly buffer CaptureDraws {
@@ -226,12 +226,15 @@ capture_items;
 // The draw's index in capture_draws is in the push constant's previous multimesh offset (motion vectors are not
 // drawn in a capture). The draw's instances: pair (gl_InstanceIndex mod pairs), and for a multimesh its instance
 // (gl_InstanceIndex / pairs).
+// With emulated point sizes the drawn instance is the quad (gl_VertexIndex / 6), as INSTANCE_INDEX has it outside
+// a capture.
 #define CAPTURE_DRAW capture_draws.data[draw_call.multimesh_motion_vectors_previous_offset]
 #define CAPTURE_PAIRS max(CAPTURE_DRAW.pair_count, 1u)
-#define CAPTURE_ITEM capture_items.data[CAPTURE_DRAW.item_offset + uint(gl_InstanceIndex) % CAPTURE_PAIRS]
+#define CAPTURE_INVOCATION (sc_emulate_point_size ? uint(gl_VertexIndex) / 6u : uint(gl_InstanceIndex))
+#define CAPTURE_ITEM capture_items.data[CAPTURE_DRAW.item_offset + CAPTURE_INVOCATION % CAPTURE_PAIRS]
 #define CAPTURE_LAYER (CAPTURE_ITEM.y)
 #undef INSTANCE_INDEX
-#define INSTANCE_INDEX (CAPTURE_ITEM.x + uint(gl_InstanceIndex) / CAPTURE_PAIRS)
+#define INSTANCE_INDEX (CAPTURE_ITEM.x + CAPTURE_INVOCATION / CAPTURE_PAIRS)
 #else
 // Declared in every variant, so the render pass's uniform set is the same for all (small buffers when not capturing).
 layout(set = 1, binding = 39, std430) restrict readonly buffer CaptureLayers {
