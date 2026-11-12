@@ -39,7 +39,8 @@ using namespace RendererRD;
 
 Luminance::Luminance(bool p_prefer_raster_effects) {
 	prefer_raster_effects = p_prefer_raster_effects;
-	log_average = GLOBAL_GET("rendering/environment/auto_exposure/log_average");
+	metering = Metering(int(GLOBAL_GET("rendering/environment/auto_exposure/metering")));
+	clip_factor = Math::pow(2.0, double(GLOBAL_GET("rendering/environment/auto_exposure/clip_stops")));
 
 	if (prefer_raster_effects) {
 		Vector<String> luminance_reduce_modes;
@@ -211,6 +212,10 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 		push_constant.max_luminance = p_max_luminance;
 		push_constant.min_luminance = p_min_luminance;
 		push_constant.exposure_adjust = p_adjust;
+		push_constant.clip_factor = clip_factor;
+		const bool log_average = metering == METERING_LOG_AVERAGE;
+		// The clipped mean needs the eye's adaptation, which a reset (p_set) does not have yet.
+		const bool clip = metering == METERING_CLIPPED_MEAN && !p_set;
 
 		RD::ComputeListID compute_list = RD::get_singleton()->compute_list_begin();
 
@@ -223,6 +228,8 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 
 				RD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, luminance_reduce.pipelines[LUMINANCE_REDUCE_READ]);
 				RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set_cache->get_cache(shader, 0, u_source_texture), 0);
+				RD::Uniform u_current_texture(RD::UNIFORM_TYPE_SAMPLER_WITH_TEXTURE, 0, Vector<RID>({ default_sampler, p_luminance_buffers->current }));
+				RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set_cache->get_cache(shader, 2, u_current_texture), 2);
 			} else {
 				RD::get_singleton()->compute_list_add_barrier(compute_list); //needs barrier, wait until previous is done
 
@@ -244,7 +251,7 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 			RD::Uniform u_reduce_texture(RD::UNIFORM_TYPE_IMAGE, 0, p_luminance_buffers->reduce[i]);
 			RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set_cache->get_cache(shader, 1, u_reduce_texture), 1);
 
-			push_constant.flags = (log_average ? LUMINANCE_LOG_AVERAGE : 0) | (i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_LAST : 0);
+			push_constant.flags = (log_average ? LUMINANCE_LOG_AVERAGE : 0) | (i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_LAST : 0) | (clip && i == 0 ? LUMINANCE_CLIP : 0);
 			RD::get_singleton()->compute_list_set_push_constant(compute_list, &push_constant, sizeof(LuminanceReducePushConstant));
 
 			RD::get_singleton()->compute_list_dispatch_threads(compute_list, push_constant.source_size[0], push_constant.source_size[1], 1);

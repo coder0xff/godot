@@ -2952,8 +2952,11 @@
 		<member name="rendering/driver/threads/thread_model" type="int" setter="" getter="" default="1" experimental="This setting has several known bugs which can lead to crashing, especially when using particles or resizing the window. Not recommended for use in production at this stage.">
 			The thread model to use for rendering. Rendering on a thread may improve performance, but synchronizing to the main thread can cause a bit more jitter.
 		</member>
-		<member name="rendering/environment/auto_exposure/log_average" type="bool" setter="" getter="" default="false">
-			If [code]true[/code], auto exposure meters the log-average (geometric mean) of the frame's luminance instead of its mean, and adapts by the same fraction of the difference in stops whether the frame got brighter or darker. A small, very bright area (a light source, a glowing object) then darkens the rest of the frame only a little, as it would for an eye or a camera's averaging meter. Only effective with the Forward+ rendering method (and wherever raster effects are not preferred); elsewhere the mean is metered.
+		<member name="rendering/environment/auto_exposure/clip_stops" type="float" setter="" getter="" default="3.0">
+			With [member rendering/environment/auto_exposure/metering] set to Clipped Mean, how far above the luminance the eye is adapted to a pixel is clipped before it is metered, in stops.
+		</member>
+		<member name="rendering/environment/auto_exposure/metering" type="int" setter="" getter="" default="0">
+			What auto exposure meters. Mean: the mean of the frame's luminance (the default). Log Average: its log-average (geometric mean), adapting by the same fraction of the difference in stops whether the frame got brighter or darker; large dark areas weigh heavily. Clipped Mean: the mean, with each pixel clipped at [member rendering/environment/auto_exposure/clip_stops] above the luminance the eye is currently adapted to, as a camera metering from its own exposed (and saturating) image; a small, very bright area (a light source, a glowing object) then darkens the rest of the frame only a little, and a frame without such areas is metered as by the mean. Only effective with the Forward+ rendering method (and wherever raster effects are not preferred); elsewhere the mean is metered.
 		</member>
 		<member name="rendering/environment/defaults/default_clear_color" type="Color" setter="" getter="" default="Color(0.3, 0.3, 0.3, 1)">
 			Default background clear color. Overridable per [Viewport] using its [Environment]. See [member Environment.background_mode] and [member Environment.background_color] in particular. To change this default color programmatically, use [method RenderingServer.set_default_clear_color].

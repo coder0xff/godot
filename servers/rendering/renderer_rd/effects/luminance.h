@@ -42,12 +42,20 @@ namespace RendererRD {
 class Luminance {
 private:
 	bool prefer_raster_effects;
-	// rendering/environment/auto_exposure/log_average: meter the log-average luminance and adapt in log space (the
-	// compute path; the raster path, used where raster effects are preferred, keeps the mean).
-	bool log_average = false;
+	// rendering/environment/auto_exposure/metering: the mean (Godot's), the log-average (adapting in log space) or the
+	// clipped mean (each pixel clipped at clip_stops above the current adaptation). The compute path only; the
+	// raster path, used where raster effects are preferred, keeps the mean.
+	enum Metering {
+		METERING_MEAN,
+		METERING_LOG_AVERAGE,
+		METERING_CLIPPED_MEAN,
+	};
+	Metering metering = METERING_MEAN;
+	float clip_factor = 8.0;
 	enum {
 		LUMINANCE_LOG_AVERAGE = 1,
 		LUMINANCE_LAST = 2,
+		LUMINANCE_CLIP = 4,
 	};
 
 	enum LuminanceReduceMode {
@@ -62,8 +70,9 @@ private:
 		float max_luminance;
 		float min_luminance;
 		float exposure_adjust;
-		uint32_t flags; // LUMINANCE_LOG_AVERAGE, LUMINANCE_LAST.
-		float pad[2];
+		uint32_t flags; // LUMINANCE_LOG_AVERAGE, LUMINANCE_LAST, LUMINANCE_CLIP.
+		float clip_factor;
+		float pad;
 	};
 
 	struct LuminanceReduce {

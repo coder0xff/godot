@@ -3690,9 +3690,11 @@ void RenderingServer::init() {
 
 	GLOBAL_DEF("rendering/lights_and_shadows/contact_shadow/enabled", false);
 	// A render of more than two views (a cube capture) draws each view as its own face pass, or all of them in one multiview pass.
-	// Auto exposure meters the log-average (geometric mean) luminance of the frame and adapts in log space (by stops)
-	// instead of the mean, so a small, very bright area does not darken the rest of the frame.
-	GLOBAL_DEF_RST("rendering/environment/auto_exposure/log_average", false);
+	// What auto exposure meters: the frame's mean luminance (Godot's), its log-average (geometric mean, adapting in log
+	// space), or its mean with each pixel clipped at clip_stops above the current adaptation, so a small, very bright
+	// area darkens the rest of the frame only a little.
+	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/environment/auto_exposure/metering", PROPERTY_HINT_ENUM, "Mean,Log Average,Clipped Mean"), 0);
+	GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/environment/auto_exposure/clip_stops", PROPERTY_HINT_RANGE, "0,16,0.1"), 3.0);
 
 	GLOBAL_DEF("rendering/multiview/face_passes", true);
 	// Each face pass draws only what its view's frustum holds.

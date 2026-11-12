@@ -24,7 +24,8 @@ layout(r32f, set = 0, binding = 0) uniform restrict readonly image2D source_lumi
 
 layout(r32f, set = 1, binding = 0) uniform restrict writeonly image2D dest_luminance;
 
-#ifdef WRITE_LUMINANCE
+#if defined(WRITE_LUMINANCE) || defined(READ_TEXTURE)
+// The eye's current adaptation: the last frame's luminance (the clipped mean's first pass reads it too).
 layout(set = 2, binding = 0) uniform sampler2D prev_luminance;
 #endif
 
@@ -35,13 +36,16 @@ layout(push_constant, std430) uniform Params {
 	float exposure_adjust;
 	// Bit 0: meter the log-average (geometric mean) luminance instead of the mean, and adapt in log space.
 	// Bit 1: this is the last reduction, which writes the frame's luminance (exp of the log-average).
+	// Bit 2: clip each pixel's luminance at clip_factor times the eye's current adaptation (the clipped mean).
 	uint flags;
-	float pad[2];
+	float clip_factor;
+	float pad;
 }
 params;
 
 #define FLAG_LOG_AVERAGE 1u
 #define FLAG_LAST 2u
+#define FLAG_CLIP 4u
 // The darkest luminance the log-average counts, so that a black pixel has a finite log.
 #define LOG_FLOOR 1e-6
 
@@ -53,6 +57,11 @@ void main() {
 #ifdef READ_TEXTURE
 		vec3 v = texelFetch(source_texture, pos, 0).rgb;
 		float l = max(v.r, max(v.g, v.b));
+		if (bool(params.flags & FLAG_CLIP)) {
+			// A meter reading its own exposed image saturates: a pixel counts at most clip_factor times the
+			// luminance the eye is adapted to.
+			l = min(l, texelFetch(prev_luminance, ivec2(0, 0), 0).r * params.clip_factor);
+		}
 		tmp_data[t] = bool(params.flags & FLAG_LOG_AVERAGE) ? log(max(l, LOG_FLOOR)) : l;
 #else
 		tmp_data[t] = imageLoad(source_luminance, pos).r;
