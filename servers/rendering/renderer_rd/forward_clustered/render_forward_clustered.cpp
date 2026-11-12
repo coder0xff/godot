@@ -3954,8 +3954,10 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 			rb_data = rb->get_custom_data(RB_SCOPE_FORWARD_CLUSTERED);
 		}
 	}
+	// The volumetric fog's: the capture pass's too.
+	Ref<RenderSceneBuffersRD> fog_rb = rb_data.is_valid() ? rb : Ref<RenderSceneBuffersRD>();
 	if (capture_render_pass) {
-		// The capture pass's set: single-view, its screen textures the defaults.
+		// The capture pass's set: single-view, its screen textures the defaults (the volumetric fog's excepted).
 		is_multiview = false;
 		rb = Ref<RenderSceneBuffersRD>();
 		rb_data = Ref<RenderBufferDataForwardClustered>();
@@ -4273,8 +4275,8 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 		u.binding = 33;
 		u.uniform_type = RD::UNIFORM_TYPE_TEXTURE;
 		RID vfog;
-		if (rb_data.is_valid() && rb->has_custom_data(RB_SCOPE_FOG)) {
-			Ref<RendererRD::Fog::VolumetricFog> fog = rb->get_custom_data(RB_SCOPE_FOG);
+		if (fog_rb.is_valid() && fog_rb->has_custom_data(RB_SCOPE_FOG)) {
+			Ref<RendererRD::Fog::VolumetricFog> fog = fog_rb->get_custom_data(RB_SCOPE_FOG);
 			vfog = fog->fog_map;
 			if (vfog.is_null()) {
 				vfog = texture_storage->texture_rd_get_default(RendererRD::TextureStorage::DEFAULT_RD_TEXTURE_3D_WHITE);
