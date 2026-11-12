@@ -3690,7 +3690,7 @@ void RenderingServer::init() {
 
 	GLOBAL_DEF("rendering/lights_and_shadows/contact_shadow/enabled", false);
 	// A render of more than two views (a cube capture) draws each view as its own face pass, or all of them in one multiview pass.
-	GLOBAL_DEF("rendering/multiview/face_passes", false);
+	GLOBAL_DEF("rendering/multiview/face_passes", true);
 	// Each face pass draws only what its view's frustum holds.
 	GLOBAL_DEF("rendering/multiview/face_cull", true);
 	GLOBAL_DEF(PropertyInfo(Variant::INT, "rendering/lights_and_shadows/contact_shadow/shadow_length", PROPERTY_HINT_ENUM, "Short (Fast),Medium (Average),Long (Slow)"), 1);
