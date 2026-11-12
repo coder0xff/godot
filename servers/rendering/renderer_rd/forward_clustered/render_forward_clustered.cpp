@@ -371,7 +371,7 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 			continue;
 		}
 
-		push_constant.base_index = i + p_params->element_offset;
+		push_constant.base_index = (p_params->element_indices ? p_params->element_indices[i] : i) + p_params->element_offset;
 
 		RID material_uniform_set;
 		void *mesh_surface;
@@ -2355,11 +2355,71 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				if (!load_color) {
 					face_clear.push_back(clear_color);
 				}
+				const bool face_cull = GLOBAL_GET_CACHED(bool, "rendering/multiview/face_cull");
+				const RenderList &opaque = render_list[RENDER_LIST_OPAQUE];
+				// The draws the faces issue, in place of the whole list's (a draw a run of equal elements).
+				int64_t list_draws = 0;
+				for (uint32_t e = 0; e < opaque.elements.size(); e += MAX(opaque.element_info[e].repeat, 1u)) {
+					list_draws++;
+				}
+				int64_t face_draws = 0;
 				for (uint32_t v = 0; v < p_render_data->scene_data->view_count; v++) {
 					render_list_params.base_specialization.face_pass = 1;
 					render_list_params.base_specialization.view_index = v;
+					if (face_cull) {
+						// The view's frustum in world space; an element is kept unless its world bounds lie wholly
+						// outside one of its planes.
+						const Vector<Plane> planes = p_render_data->scene_data->view_projection[v].get_projection_planes(p_render_data->scene_data->cam_transform);
+						face_elements.clear();
+						face_element_info.clear();
+						face_element_indices.clear();
+						for (uint32_t e = 0; e < opaque.elements.size(); e++) {
+							const AABB &aabb = opaque.elements[e]->owner->transformed_aabb;
+							bool outside = false;
+							for (const Plane &plane : planes) {
+								// The box's corner farthest against the plane's outward normal.
+								Vector3 corner = aabb.position;
+								for (int a = 0; a < 3; a++) {
+									if (plane.normal[a] < 0) {
+										corner[a] += aabb.size[a];
+									}
+								}
+								if (plane.distance_to(corner) > 0) {
+									outside = true;
+									break;
+								}
+							}
+							if (!outside) {
+								face_elements.push_back(opaque.elements[e]);
+								face_element_info.push_back(opaque.element_info[e]);
+								face_element_indices.push_back(e);
+							}
+						}
+						// Runs of equal elements are drawn as one instanced draw of `repeat` instances, the run's first
+						// element holding the run's length. A kept element continues the run of the one before it in the
+						// face's list only if they were neighbours in the same run of the whole list.
+						for (int64_t k = int64_t(face_elements.size()) - 1; k >= 0; k--) {
+							const uint32_t o = face_element_indices[k];
+							const bool continues = k + 1 < int64_t(face_elements.size()) && face_element_indices[k + 1] == o + 1 && opaque.element_info[o].repeat > 1;
+							face_element_info[k].repeat = continues ? face_element_info[k + 1].repeat + 1 : 1;
+						}
+						render_list_params.elements = face_elements.ptr();
+						render_list_params.element_info = face_element_info.ptr();
+						render_list_params.element_count = face_elements.size();
+						render_list_params.element_indices = face_element_indices.ptr();
+						for (uint32_t e = 0; e < face_elements.size(); e += MAX(face_element_info[e].repeat, 1u)) {
+							face_draws++;
+						}
+					} else {
+						face_draws += list_draws;
+					}
 					RID face_fb = rb_data->get_color_pass_face_fb(opaque_color_pass_flags, v);
 					_render_list_with_draw_list(&render_list_params, face_fb, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, face_clear, 0.0f, 0u, p_render_data->render_region);
+				}
+				if (p_render_data->render_info) {
+					// Objects stay the render's whole cull; draw calls become the faces' (their mean a face against
+					// the objects shows the culling).
+					p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE][RSE::VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME] += face_draws - list_draws;
 				}
 			} else {
 				_render_list_with_draw_list(&render_list_params, opaque_framebuffer, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | (depth_pre_pass ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_DEPTH), c, 0.0f, 0u, p_render_data->render_region);

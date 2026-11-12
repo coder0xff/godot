@@ -226,6 +226,9 @@ private:
 		GeometryInstanceSurfaceDataCache **elements = nullptr;
 		RenderElementInfo *element_info = nullptr;
 		int element_count = 0;
+		// A subset of a render list (a face pass's culled list): each element's index in the list its instance data
+		// was filled for. Null: the elements are that list.
+		const uint32_t *element_indices = nullptr;
 		bool reverse_cull = false;
 		PassMode pass_mode = PASS_MODE_COLOR;
 		uint32_t color_pass_flags = 0;
@@ -759,6 +762,11 @@ private:
 	};
 
 	RenderList render_list[RENDER_LIST_MAX];
+
+	// A face pass's opaque list, culled to its view's frustum (renders of more than two views).
+	LocalVector<GeometryInstanceSurfaceDataCache *> face_elements;
+	LocalVector<RenderElementInfo> face_element_info;
+	LocalVector<uint32_t> face_element_indices;
 
 	virtual void _update_shader_quality_settings() override;
 
