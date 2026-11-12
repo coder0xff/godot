@@ -3045,12 +3045,17 @@ void RenderingDeviceDriverVulkan::command_pipeline_barrier(
 		VectorView<BufferBarrier> p_buffer_barriers,
 		VectorView<TextureBarrier> p_texture_barriers,
 		VectorView<AccelerationStructureBarrier> p_acceleration_structure_barriers) {
+	// Without rayQuery, a barrier's VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR may not meet shader stages other than
+	// the ray tracing stage, so it is dropped from the global barriers (the acceleration structure barriers below keep
+	// it). With rayQuery it is kept, so that a ray query's reads (of a top level and the bottom levels it refers to)
+	// are made visible by the global barrier as well as by the barriers on the structures' own buffers.
+	const VkAccessFlags global_access_mask = ray_query_support ? ~VkAccessFlags(0) : ~VkAccessFlags(VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 	VkMemoryBarrier *vk_memory_barriers = ALLOCA_ARRAY(VkMemoryBarrier, p_memory_barriers.size());
 	for (uint32_t i = 0; i < p_memory_barriers.size(); i++) {
 		vk_memory_barriers[i] = {};
 		vk_memory_barriers[i].sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-		vk_memory_barriers[i].srcAccessMask = _rd_to_vk_access_flags(p_memory_barriers[i].src_access) & ~VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-		vk_memory_barriers[i].dstAccessMask = _rd_to_vk_access_flags(p_memory_barriers[i].dst_access) & ~VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+		vk_memory_barriers[i].srcAccessMask = _rd_to_vk_access_flags(p_memory_barriers[i].src_access) & global_access_mask;
+		vk_memory_barriers[i].dstAccessMask = _rd_to_vk_access_flags(p_memory_barriers[i].dst_access) & global_access_mask;
 	}
 
 	VkBufferMemoryBarrier *vk_buffer_barriers = ALLOCA_ARRAY(VkBufferMemoryBarrier, p_buffer_barriers.size());
