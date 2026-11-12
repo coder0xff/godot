@@ -47,7 +47,8 @@ public:
 	enum {
 		MAX_DIRECTIONAL_LIGHTS = 8,
 		MAX_DIRECTIONAL_LIGHT_CASCADES = 4,
-		MAX_RENDER_VIEWS = 2
+		// Stereo needs 2; a light probe's cube capture renders its 6 faces as the views of one pass.
+		MAX_RENDER_VIEWS = 8
 	};
 
 	/* Geometry Instance */

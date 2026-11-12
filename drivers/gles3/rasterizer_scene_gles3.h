@@ -99,6 +99,9 @@ enum SkyUniformLocation {
 	SKY_EMPTY11, // Unused, put here to avoid conflicts with SCENE_DECAL_DATA.
 };
 
+// The compatibility renderer's multiview is stereo only (OVR_multiview2); its shaders define MAX_VIEWS 2.
+constexpr int GLES3_MAX_VIEWS = 2;
+
 struct RenderDataGLES3 {
 	Ref<RenderSceneBuffersGLES3> render_buffers;
 	bool transparent_bg = false;
@@ -115,8 +118,8 @@ struct RenderDataGLES3 {
 
 	// For stereo rendering
 	uint32_t view_count = 1;
-	Vector3 view_eye_offset[RendererSceneRender::MAX_RENDER_VIEWS];
-	Projection view_projection[RendererSceneRender::MAX_RENDER_VIEWS];
+	Vector3 view_eye_offset[GLES3_MAX_VIEWS];
+	Projection view_projection[GLES3_MAX_VIEWS];
 
 	float z_near = 0.0;
 	float z_far = 0.0;
@@ -464,9 +467,9 @@ private:
 		static_assert(sizeof(UBO) < 16384, "Scene UBO size must be 16384 bytes or smaller");
 
 		struct MultiviewUBO {
-			float projection_matrix_view[RendererSceneRender::MAX_RENDER_VIEWS][16];
-			float inv_projection_matrix_view[RendererSceneRender::MAX_RENDER_VIEWS][16];
-			float eye_offset[RendererSceneRender::MAX_RENDER_VIEWS][4];
+			float projection_matrix_view[GLES3_MAX_VIEWS][16];
+			float inv_projection_matrix_view[GLES3_MAX_VIEWS][16];
+			float eye_offset[GLES3_MAX_VIEWS][4];
 			// Current view being rendered. Used when emulating multiview by
 			// rendering once per view (when the GPU doesn't support multiview).
 			uint32_t view_index = 0;

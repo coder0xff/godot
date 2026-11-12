@@ -2175,7 +2175,7 @@ void RendererSceneCull::_update_instance_lightmap_captures(Instance *p_instance)
 	geom->geometry_instance->set_lightmap_capture(p_instance->lightmap_sh.ptr());
 }
 
-void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect) {
+void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_index, Instance *p_instance, const Transform3D p_cam_transform, const Projection &p_cam_projection, bool p_cam_orthogonal, bool p_cam_vaspect, bool p_cam_box) {
 	// For later tight culling, the light culler needs to know the details of the directional light.
 	light_culler->prepare_directional_light_begin(p_instance, p_shadow_index);
 
@@ -2218,6 +2218,15 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 
 	distances[splits] = max_distance;
 
+	if (p_cam_box) {
+		// The box around a camera of more than two views (CameraData::set_multiview_camera) spans depths from -far to
+		// far, and the scene shader's cascade selection and blur assume split distances that are positive and
+		// increasing. Every cascade covers the whole box, so the first, whose split is far, is the one used.
+		for (int i = 1; i <= splits; i++) {
+			distances[i] = max_distance;
+		}
+	}
+
 	real_t texture_size = RSG::light_storage->get_directional_light_shadow_size(light->instance);
 
 	bool overlap = RSG::light_storage->light_directional_get_blend_splits(p_instance->base);
@@ -2238,7 +2247,8 @@ void RendererSceneCull::_light_instance_setup_directional_shadow(int p_shadow_in
 		if (p_cam_orthogonal) {
 			Vector2 vp_he = p_cam_projection.get_viewport_half_extents();
 
-			camera_matrix.set_orthogonal(vp_he.y * 2.0, aspect, distances[(i == 0 || !overlap) ? i : i - 1], distances[i + 1], false);
+			const real_t cascade_near = p_cam_box ? distances[0] : distances[(i == 0 || !overlap) ? i : i - 1];
+			camera_matrix.set_orthogonal(vp_he.y * 2.0, aspect, cascade_near, distances[i + 1], false);
 		} else {
 			real_t fov = p_cam_projection.get_fov(); //this is actually yfov, because set aspect tries to keep it
 			camera_matrix.set_perspective(fov, aspect, distances[(i == 0 || !overlap) ? i : i - 1], distances[i + 1], true);
@@ -2793,7 +2803,7 @@ void RendererSceneCull::render_camera(const Ref<RenderSceneBuffers> &p_render_bu
 
 	if (camera->projections.size() == 1) {
 		camera_data.set_camera(transform * camera->offsets[0], camera->projections[0], is_orthogonal, vaspect, jitter, taa_frame_count, camera->visible_layers);
-	} else if (camera->projections.size() == 2) {
+	} else if (camera->projections.size() >= 2) {
 		camera_data.set_multiview_camera(transform, camera->offsets, camera->projections, is_orthogonal, vaspect, camera->visible_layers);
 	} else {
 		ERR_FAIL_MSG("Unsupported camera setup.");
@@ -3411,8 +3421,11 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 
 		RSG::light_storage->set_directional_shadow_count(lights_with_shadow.size());
 
+		// More than two views: the main projection is the box around the camera (CameraData::set_multiview_camera),
+		// orthographic whatever the views are, and the cascades are fitted to it as such.
+		const bool camera_box = p_camera_data->view_count > 2;
 		for (int i = 0; i < lights_with_shadow.size(); i++) {
-			_light_instance_setup_directional_shadow(i, lights_with_shadow[i], p_camera_data->main_transform, p_camera_data->main_projection, p_camera_data->is_orthogonal, p_camera_data->vaspect);
+			_light_instance_setup_directional_shadow(i, lights_with_shadow[i], p_camera_data->main_transform, p_camera_data->main_projection, p_camera_data->is_orthogonal || camera_box, p_camera_data->vaspect, camera_box);
 		}
 	}
 

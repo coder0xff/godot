@@ -2442,6 +2442,7 @@ void RasterizerSceneGLES3::render_scene(const Ref<RenderSceneBuffers> &p_render_
 
 	// View count of our render target must match our camera data.
 	ERR_FAIL_COND(rb->get_view_count() != p_camera_data->view_count);
+	ERR_FAIL_COND_MSG(p_camera_data->view_count > (uint32_t)GLES3_MAX_VIEWS, "The Compatibility renderer supports at most 2 views.");
 
 	if (rb->get_scaling_3d_mode() != RSE::VIEWPORT_SCALING_3D_MODE_OFF) {
 		// If we're scaling, we apply tonemapping etc. in post, so disable it during rendering
