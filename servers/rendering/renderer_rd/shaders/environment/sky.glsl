@@ -58,10 +58,12 @@ layout(set = 0, binding = 1, std430) restrict readonly buffer GlobalShaderUnifor
 }
 global_shader_uniforms;
 
+#define MAX_VIEWS 8 // RendererSceneRender::MAX_RENDER_VIEWS
+
 layout(set = 0, binding = 2, std140) uniform SkySceneData {
-	mat4 combined_reprojection[2];
-	mat4 view_inv_projections[2];
-	vec4 view_eye_offsets[2];
+	mat4 combined_reprojection[MAX_VIEWS];
+	mat4 view_inv_projections[MAX_VIEWS];
+	vec4 view_eye_offsets[MAX_VIEWS];
 
 	bool volumetric_fog_enabled; // 4 - 4
 	float volumetric_fog_inv_length; // 4 - 8

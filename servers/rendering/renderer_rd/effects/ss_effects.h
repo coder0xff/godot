@@ -47,6 +47,7 @@
 #include "servers/rendering/renderer_rd/shaders/effects/ssil_importance_map.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/effects/ssil_interleave.glsl.gen.h"
 #include "servers/rendering/renderer_rd/shaders/effects/subsurface_scattering.glsl.gen.h"
+#include "servers/rendering/renderer_scene_render.h"
 
 #define RB_SCOPE_SSLF SNAME("rb_sslf")
 #define RB_SCOPE_SSDS SNAME("rb_ssds")
@@ -463,10 +464,10 @@ private:
 	};
 
 	struct ScreenSpaceReflectionSceneData {
-		float projection[2][16];
-		float inv_projection[2][16];
-		float reprojection[2][16];
-		float eye_offset[2][4];
+		float projection[RendererSceneRender::MAX_RENDER_VIEWS][16];
+		float inv_projection[RendererSceneRender::MAX_RENDER_VIEWS][16];
+		float reprojection[RendererSceneRender::MAX_RENDER_VIEWS][16];
+		float eye_offset[RendererSceneRender::MAX_RENDER_VIEWS][4];
 	};
 
 	struct ScreenSpaceReflectionPushConstant {

@@ -3,7 +3,7 @@
 #define ROUGHNESS_MAX_LOD 5
 
 #define MAX_VOXEL_GI_INSTANCES 8
-#define MAX_VIEWS 2
+#define MAX_VIEWS 8 // RendererSceneRender::MAX_RENDER_VIEWS
 
 #extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable

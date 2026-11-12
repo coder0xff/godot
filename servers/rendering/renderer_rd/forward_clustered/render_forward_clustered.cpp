@@ -495,6 +495,7 @@ void RenderForwardClustered::_render_list_template(RenderingDevice::DrawListID p
 
 		pipeline_key.framebuffer_format_id = framebuffer_format;
 		pipeline_key.wireframe = p_params->force_wireframe;
+		pipeline_key.depth_pre_pass_skipped = p_pass_mode == PASS_MODE_COLOR && p_params->depth_pre_pass_skipped;
 		pipeline_key.ubershader = 0;
 
 		bool emulate_point_size = shader->uses_point_size && scene_shader.emulate_point_size;
@@ -1727,6 +1728,8 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 		// This only works as we don't filter our cluster by depth buffer.
 		// If we ever make this optimization we should make it optional and only use it in mono.
 		// What we win by filtering out a few lights, we loose by having to do the work double for stereo.
+		// More than two views have no combined frustum: cam_projection is then a box around the camera
+		// (CameraData::set_multiview_camera), which the clusters are built in and looked up through alike.
 		current_cluster_builder->begin(p_render_data->scene_data->cam_transform, p_render_data->scene_data->cam_projection, !p_render_data->reflection_probe.is_valid());
 	}
 
@@ -1970,6 +1973,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			using_sscs = true;
 		}
 
+		if (p_render_data->scene_data->view_count > 2 && (using_sdfgi || using_voxelgi)) {
+			WARN_PRINT_ONCE("SDFGI and VoxelGI support at most 2 views. Disabling them in a render of more views.");
+			using_sdfgi = false;
+			using_voxelgi = false;
+		}
+
 		if (p_render_data->scene_data->view_count > 1) {
 			color_pass_flags |= COLOR_PASS_FLAG_MULTIVIEW;
 			// Try enabling here in case is_xr_enabled() returns false.
@@ -2198,6 +2207,18 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool force_depth_pre_pass = scene_state.used_opaque_stencil || using_ssao || using_ssr || using_sscs || using_ssil;
 	bool depth_pre_pass = (force_depth_pre_pass || scene_shader.depth_prepass_enabled) && depth_framebuffer.is_valid();
 
+	// More than two views (a cube capture's six faces): each draw goes to every view, so the render is vertex-bound,
+	// and the pre-pass draws every vertex a second time. It is skipped when nothing reads its depth or normals before
+	// the opaque pass (the screen-space effects already force it), which then tests and writes depth itself.
+	bool depth_pre_pass_skipped = false;
+	if (depth_pre_pass && !force_depth_pre_pass && p_render_data->scene_data->view_count > 2 && depth_pass_mode == PASS_MODE_DEPTH) {
+		const bool motion_vectors = color_pass_flags & COLOR_PASS_FLAG_MOTION_VECTORS;
+		if (!using_sdfgi && !using_voxelgi && !motion_vectors && !ce_pre_opaque_resolved_depth && !ce_post_opaque_resolved_depth) {
+			depth_pre_pass = false;
+			depth_pre_pass_skipped = true;
+		}
+	}
+
 	SceneShaderForwardClustered::ShaderSpecialization base_specialization = scene_shader.default_specialization;
 	base_specialization.use_depth_fog = p_render_data->environment.is_valid() && environment_get_fog_mode(p_render_data->environment) == RSE::EnvironmentFogMode::ENV_FOG_MODE_DEPTH;
 
@@ -2313,6 +2334,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			uint32_t opaque_color_pass_flags = using_motion_pass ? (color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS)) : color_pass_flags;
 			RID opaque_framebuffer = using_motion_pass ? rb_data->get_color_pass_fb(opaque_color_pass_flags) : color_framebuffer;
 			RenderListParameters render_list_params(render_list[RENDER_LIST_OPAQUE].elements.ptr(), render_list[RENDER_LIST_OPAQUE].element_info.ptr(), render_list[RENDER_LIST_OPAQUE].elements.size(), reverse_cull, PASS_MODE_COLOR, opaque_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization, !is_reflection_probe);
+			render_list_params.depth_pre_pass_skipped = depth_pre_pass_skipped;
 			_render_list_with_draw_list(&render_list_params, opaque_framebuffer, RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | (depth_pre_pass ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_DEPTH), c, 0.0f, 0u, p_render_data->render_region);
 		}
 

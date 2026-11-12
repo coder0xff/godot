@@ -1538,6 +1538,7 @@ void GI::SDFGI::debug_draw(uint32_t p_view_count, const Projection *p_projection
 	RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
 	RendererRD::CopyEffects *copy_effects = RendererRD::CopyEffects::get_singleton();
+	ERR_FAIL_COND_MSG(p_view_count > 2, "SDFGI's debug draw supports at most 2 views.");
 
 	for (uint32_t v = 0; v < p_view_count; v++) {
 		if (!debug_uniform_set[v].is_valid() || !RD::get_singleton()->uniform_set_is_valid(debug_uniform_set[v])) {
@@ -1676,6 +1677,7 @@ void GI::SDFGI::debug_draw(uint32_t p_view_count, const Projection *p_projection
 
 void GI::SDFGI::debug_probes(RID p_framebuffer, const uint32_t p_view_count, const Projection *p_camera_with_transforms) {
 	RendererRD::MaterialStorage *material_storage = RendererRD::MaterialStorage::get_singleton();
+	ERR_FAIL_COND_MSG(p_view_count > 2, "SDFGI's debug probes support at most 2 views.");
 
 	// setup scene data
 	{

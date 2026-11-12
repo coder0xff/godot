@@ -12,11 +12,13 @@ layout(set = 0, binding = 2) uniform sampler2D source_normal_roughness;
 layout(rgba16f, set = 0, binding = 3) uniform restrict writeonly image2D output_color;
 layout(r8, set = 0, binding = 4) uniform restrict writeonly image2D output_mip_level;
 
+#define MAX_VIEWS 8 // RendererSceneRender::MAX_RENDER_VIEWS
+
 layout(set = 0, binding = 5, std140) uniform SceneData {
-	mat4 projection[2];
-	mat4 inv_projection[2];
-	mat4 reprojection[2];
-	vec4 eye_offset[2];
+	mat4 projection[MAX_VIEWS];
+	mat4 inv_projection[MAX_VIEWS];
+	mat4 reprojection[MAX_VIEWS];
+	vec4 eye_offset[MAX_VIEWS];
 }
 scene_data;
 

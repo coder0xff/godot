@@ -1,5 +1,5 @@
 #define M_PI 3.14159265359
-#define MAX_VIEWS 2
+#define MAX_VIEWS 8 // RendererSceneRender::MAX_RENDER_VIEWS
 
 #include "../decal_data_inc.glsl"
 #include "../oct_inc.glsl"

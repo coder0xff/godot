@@ -120,7 +120,9 @@ void main() {
 	//find the current element in the depth usage list and mark the current depth as used
 	float unit_depth = depth_interp * state.inv_z_far;
 
-	uint z_bit = clamp(uint(floor(unit_depth * 32.0)), 0, 31);
+	// Clamped before the conversion: an element behind the camera (a box projection's, for more than two views) has
+	// a negative depth, and a negative float's conversion to uint is undefined.
+	uint z_bit = uint(clamp(floor(unit_depth * 32.0), 0.0, 31.0));
 
 	uint z_write_offset = cluster_offset + state.cluster_depth_offset + element_index;
 	uint z_write_bit = 1 << z_bit;

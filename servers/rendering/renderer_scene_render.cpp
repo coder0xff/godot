@@ -51,7 +51,7 @@ void RendererSceneRender::CameraData::set_camera(const Transform3D p_transform, 
 }
 
 void RendererSceneRender::CameraData::set_multiview_camera(const Transform3D &p_transform, const LocalVector<Transform3D> &p_offsets, const LocalVector<Projection> &p_projections, bool p_is_orthogonal, bool p_vaspect, uint32_t p_visible_layers) {
-	ERR_FAIL_COND_MSG(p_projections.size() != 2, "Incorrect view count for stereoscopic view");
+	ERR_FAIL_COND_MSG(p_projections.size() < 2 || p_projections.size() > RendererSceneRender::MAX_RENDER_VIEWS, "Incorrect view count for a multiview camera");
 	ERR_FAIL_COND(p_projections.size() != p_offsets.size());
 
 	visible_layers = p_visible_layers;
@@ -60,7 +60,17 @@ void RendererSceneRender::CameraData::set_multiview_camera(const Transform3D &p_
 	vaspect = p_vaspect;
 
 	main_transform = p_transform;
-	main_projection = Projection::create_combined_projection(p_transform, p_projections[0], p_offsets[0], p_projections[1], p_offsets[1]);
+	if (p_projections.size() == 2) {
+		main_projection = Projection::create_combined_projection(p_transform, p_projections[0], p_offsets[0], p_projections[1], p_offsets[1]);
+	} else {
+		// More than two views may look in any direction (a cube capture's six faces): no one frustum holds them,
+		// so cull against the box that holds every view out to the farthest far plane, around the camera.
+		real_t far = 0.0;
+		for (uint32_t v = 0; v < p_projections.size(); v++) {
+			far = MAX(far, p_projections[v].get_z_far() + p_offsets[v].origin.length());
+		}
+		main_projection.set_orthogonal(-far, far, -far, far, -far, far);
+	}
 
 	for (uint32_t v = 0; v < view_count; v++) {
 		view_offset[v] = p_offsets[v];
