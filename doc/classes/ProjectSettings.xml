@@ -2952,6 +2952,9 @@
 		<member name="rendering/driver/threads/thread_model" type="int" setter="" getter="" default="1" experimental="This setting has several known bugs which can lead to crashing, especially when using particles or resizing the window. Not recommended for use in production at this stage.">
 			The thread model to use for rendering. Rendering on a thread may improve performance, but synchronizing to the main thread can cause a bit more jitter.
 		</member>
+		<member name="rendering/environment/auto_exposure/log_average" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], auto exposure meters the log-average (geometric mean) of the frame's luminance instead of its mean, and adapts by the same fraction of the difference in stops whether the frame got brighter or darker. A small, very bright area (a light source, a glowing object) then darkens the rest of the frame only a little, as it would for an eye or a camera's averaging meter. Only effective with the Forward+ rendering method (and wherever raster effects are not preferred); elsewhere the mean is metered.
+		</member>
 		<member name="rendering/environment/defaults/default_clear_color" type="Color" setter="" getter="" default="Color(0.3, 0.3, 0.3, 1)">
 			Default background clear color. Overridable per [Viewport] using its [Environment]. See [member Environment.background_mode] and [member Environment.background_color] in particular. To change this default color programmatically, use [method RenderingServer.set_default_clear_color].
 		</member>

@@ -30,6 +30,7 @@
 
 #include "luminance.h"
 
+#include "core/config/project_settings.h"
 #include "servers/rendering/renderer_rd/framebuffer_cache_rd.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
@@ -38,6 +39,7 @@ using namespace RendererRD;
 
 Luminance::Luminance(bool p_prefer_raster_effects) {
 	prefer_raster_effects = p_prefer_raster_effects;
+	log_average = GLOBAL_GET("rendering/environment/auto_exposure/log_average");
 
 	if (prefer_raster_effects) {
 		Vector<String> luminance_reduce_modes;
@@ -242,6 +244,7 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 			RD::Uniform u_reduce_texture(RD::UNIFORM_TYPE_IMAGE, 0, p_luminance_buffers->reduce[i]);
 			RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set_cache->get_cache(shader, 1, u_reduce_texture), 1);
 
+			push_constant.flags = (log_average ? LUMINANCE_LOG_AVERAGE : 0) | (i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_LAST : 0);
 			RD::get_singleton()->compute_list_set_push_constant(compute_list, &push_constant, sizeof(LuminanceReducePushConstant));
 
 			RD::get_singleton()->compute_list_dispatch_threads(compute_list, push_constant.source_size[0], push_constant.source_size[1], 1);

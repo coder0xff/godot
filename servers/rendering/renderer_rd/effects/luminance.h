@@ -42,6 +42,13 @@ namespace RendererRD {
 class Luminance {
 private:
 	bool prefer_raster_effects;
+	// rendering/environment/auto_exposure/log_average: meter the log-average luminance and adapt in log space (the
+	// compute path; the raster path, used where raster effects are preferred, keeps the mean).
+	bool log_average = false;
+	enum {
+		LUMINANCE_LOG_AVERAGE = 1,
+		LUMINANCE_LAST = 2,
+	};
 
 	enum LuminanceReduceMode {
 		LUMINANCE_REDUCE_READ,
@@ -55,7 +62,8 @@ private:
 		float max_luminance;
 		float min_luminance;
 		float exposure_adjust;
-		float pad[3];
+		uint32_t flags; // LUMINANCE_LOG_AVERAGE, LUMINANCE_LAST.
+		float pad[2];
 	};
 
 	struct LuminanceReduce {

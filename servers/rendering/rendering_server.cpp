@@ -3690,6 +3690,10 @@ void RenderingServer::init() {
 
 	GLOBAL_DEF("rendering/lights_and_shadows/contact_shadow/enabled", false);
 	// A render of more than two views (a cube capture) draws each view as its own face pass, or all of them in one multiview pass.
+	// Auto exposure meters the log-average (geometric mean) luminance of the frame and adapts in log space (by stops)
+	// instead of the mean, so a small, very bright area does not darken the rest of the frame.
+	GLOBAL_DEF_RST("rendering/environment/auto_exposure/log_average", false);
+
 	GLOBAL_DEF("rendering/multiview/face_passes", true);
 	// Each face pass draws only what its view's frustum holds.
 	GLOBAL_DEF("rendering/multiview/face_cull", true);
