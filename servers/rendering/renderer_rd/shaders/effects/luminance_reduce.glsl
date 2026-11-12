@@ -33,9 +33,17 @@ layout(push_constant, std430) uniform Params {
 	float max_luminance;
 	float min_luminance;
 	float exposure_adjust;
-	float pad[3];
+	// Bit 0: meter the log-average (geometric mean) luminance instead of the mean, and adapt in log space.
+	// Bit 1: this is the last reduction, which writes the frame's luminance (exp of the log-average).
+	uint flags;
+	float pad[2];
 }
 params;
+
+#define FLAG_LOG_AVERAGE 1u
+#define FLAG_LAST 2u
+// The darkest luminance the log-average counts, so that a black pixel has a finite log.
+#define LOG_FLOOR 1e-6
 
 void main() {
 	uint t = gl_LocalInvocationID.y * BLOCK_SIZE + gl_LocalInvocationID.x;
@@ -44,7 +52,8 @@ void main() {
 	if (any(lessThan(pos, params.source_size))) {
 #ifdef READ_TEXTURE
 		vec3 v = texelFetch(source_texture, pos, 0).rgb;
-		tmp_data[t] = max(v.r, max(v.g, v.b));
+		float l = max(v.r, max(v.g, v.b));
+		tmp_data[t] = bool(params.flags & FLAG_LOG_AVERAGE) ? log(max(l, LOG_FLOOR)) : l;
 #else
 		tmp_data[t] = imageLoad(source_luminance, pos).r;
 #endif
@@ -73,9 +82,20 @@ void main() {
 		float avg = tmp_data[0] / float(rect_size.x * rect_size.y);
 		//float avg = tmp_data[0] / float(BLOCK_SIZE*BLOCK_SIZE);
 		pos /= ivec2(BLOCK_SIZE);
+		bool log_average = bool(params.flags & FLAG_LOG_AVERAGE);
+		if (log_average && bool(params.flags & FLAG_LAST)) {
+			avg = exp(avg);
+		}
 #ifdef WRITE_LUMINANCE
 		float prev_lum = texelFetch(prev_luminance, ivec2(0, 0), 0).r; //1 pixel previous exposure
-		avg = clamp(prev_lum + (avg - prev_lum) * params.exposure_adjust, params.min_luminance, params.max_luminance);
+		if (log_average) {
+			// Adapt by the same fraction of the step in stops, up or down.
+			float prev_log = log(max(prev_lum, LOG_FLOOR));
+			avg = exp(prev_log + (log(avg) - prev_log) * params.exposure_adjust);
+		} else {
+			avg = prev_lum + (avg - prev_lum) * params.exposure_adjust;
+		}
+		avg = clamp(avg, params.min_luminance, params.max_luminance);
 #endif
 		imageStore(dest_luminance, pos, vec4(avg));
 	}
