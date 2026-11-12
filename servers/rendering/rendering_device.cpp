@@ -505,6 +505,13 @@ Error RenderingDevice::blas_build(RID p_blas) {
 	Error err = _acceleration_structure_scratch_buffer_create(blas);
 	ERR_FAIL_COND_V(err != OK, err);
 
+	// The build is a synchronization point of the graph: every command recorded before it runs before it, and every
+	// command recorded after it after it, so no other command shares its level when the graph reorders. With other
+	// compute levelled beside a BLAS build (commands the graph sees as independent of it, recorded before or after it),
+	// the first ray query through a TLAS over that BLAS in the same submission missed every instance on an RTX 4090
+	// (fields, Asana 1220482669437189); GODOT_RG_REORDER=0 and GODOT_RG_FULL_BARRIERS=1 each removed it, and so did
+	// timestamps on either side of the builds.
+	draw_graph.add_synchronization(true);
 	draw_graph.add_blas_build(blas->driver_id, blas->scratch_buffer, blas->draw_tracker, blas->draw_trackers);
 
 	blas->invalidated = false;

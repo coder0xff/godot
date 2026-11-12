@@ -2608,9 +2608,10 @@ void RenderingDeviceGraph::add_capture_timestamp(RDD::QueryPoolID p_query_pool, 
 	_add_command_to_graph(nullptr, nullptr, 0, command_index, command);
 }
 
-void RenderingDeviceGraph::add_synchronization() {
-	// Synchronization is only acknowledged if commands have been recorded on the graph already.
-	if (command_count > 0) {
+void RenderingDeviceGraph::add_synchronization(bool p_even_if_first) {
+	// Synchronization is only acknowledged if commands have been recorded on the graph already, unless asked for even
+	// then (`p_even_if_first`): the next command still orders every command recorded after it.
+	if (command_count > 0 || p_even_if_first) {
 		command_synchronization_pending = true;
 	}
 }
