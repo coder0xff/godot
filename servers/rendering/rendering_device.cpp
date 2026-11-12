@@ -1381,17 +1381,30 @@ Vector<uint8_t> RenderingDevice::buffer_get_data(RID p_buffer, uint32_t p_offset
 	draw_graph.add_buffer_get_data(buffer->driver_id, buffer->draw_tracker, tmp_buffer, region);
 
 	// Flush everything so memory can be safely mapped.
-	_flush_and_stall_for_all_frames();
+	// This is the same as `_flush_and_stall_for_all_frames()`, except that the returned array is
+	// allocated and its pages are touched while the GPU performs the copy. A large allocation is
+	// usually fresh memory from the OS, so committing its pages on first write would otherwise
+	// happen in the `memcpy()` below, after the wait.
+	_stall_for_previous_frames();
+	_end_frame();
+	_execute_frame(false);
+
+	Vector<uint8_t> buffer_data;
+	buffer_data.resize(p_size);
+	uint8_t *w = buffer_data.ptrw();
+	// Write one byte per 4 KiB page. The `memcpy()` below overwrites these stores, so they go
+	// through a volatile pointer to keep the compiler from removing them.
+	volatile uint8_t *touch = w;
+	for (uint64_t i = 0; i < p_size; i += 4096) {
+		touch[i] = 0;
+	}
+
+	_begin_frame();
 
 	uint8_t *buffer_mem = driver->buffer_map(tmp_buffer);
 	ERR_FAIL_NULL_V(buffer_mem, Vector<uint8_t>());
 
-	Vector<uint8_t> buffer_data;
-	{
-		buffer_data.resize(p_size);
-		uint8_t *w = buffer_data.ptrw();
-		memcpy(w, buffer_mem, p_size);
-	}
+	memcpy(w, buffer_mem, p_size);
 
 	driver->buffer_unmap(tmp_buffer);
 
