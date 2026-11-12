@@ -1197,11 +1197,13 @@ void SkyRD::setup_sky(const RenderDataRD *p_render_data, const Size2i p_screen_s
 
 	// Setup fog variables.
 	sky_scene_state.ubo.volumetric_fog_enabled = false;
+	sky_scene_state.ubo.volumetric_fog_grid = 0;
 	if (p_render_data->render_buffers->has_custom_data(RB_SCOPE_FOG)) {
 		Ref<RendererRD::Fog::VolumetricFog> fog = p_render_data->render_buffers->get_custom_data(RB_SCOPE_FOG);
 		sky_scene_state.ubo.volumetric_fog_enabled = true;
+		sky_scene_state.ubo.volumetric_fog_grid = fog->grid ? 1 : 0;
 
-		float fog_end = fog->length;
+		float fog_end = fog->grid ? fog->grid_half_extent : fog->length; // With the grid, its half extent.
 		if (fog_end > 0.0) {
 			sky_scene_state.ubo.volumetric_fog_inv_length = 1.0 / fog_end;
 		} else {

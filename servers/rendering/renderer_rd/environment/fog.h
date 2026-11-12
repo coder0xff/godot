@@ -124,6 +124,10 @@ private:
 
 			float to_prev_view[16];
 			float transform[16];
+
+			uint32_t grid_mode; // A render of more than two views (a probe's faces): the cells on a cube around the camera.
+			float grid_half_extent;
+			float pad_grid[2];
 		};
 
 		ShaderCompiler compiler;
@@ -188,6 +192,11 @@ private:
 			float cam_rotation[12];
 			float to_prev_view[16];
 			float radiance_inverse_xform[12];
+
+			uint32_t cluster_layer_count; // Past 1: the clusters by view (their projections at binding 22).
+			float cluster_layer_z_far;
+			uint32_t grid_mode;
+			float grid_half_extent;
 		};
 
 		VolumetricFogProcessShaderRD process_shader;
@@ -310,6 +319,13 @@ public:
 		float length;
 		float spread;
 
+		// A render of more than two views (a probe's faces) has its fog on a grid: a cube around the camera, each
+		// axis's cells spread out from the centre as the frustum's slices are along its depth (by spread), that the
+		// scene and sky shaders march per pixel along their rays (the frustum's cells and their integration fit no
+		// one view of several). The cube's half extent: the fog's length past the farthest eye.
+		bool grid = false;
+		float grid_half_extent = 0.0;
+
 		RID light_density_map;
 		RID prev_light_density_map;
 		RID fog_map;
@@ -365,6 +381,8 @@ public:
 		// Objects related to our render buffer
 		Ref<VolumetricFog> vfog;
 		ClusterBuilderRD *cluster_builder;
+		uint32_t cluster_layers = 1; // Past 1: the clusters by view, and the fog on the grid (VolumetricFog::grid).
+		float cluster_layer_z_far = 0.0;
 		GI *gi;
 		Ref<GI::SDFGI> sdfgi;
 		Ref<GI::RenderBuffersGI> rbgi;

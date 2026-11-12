@@ -81,7 +81,7 @@ layout(set = 0, binding = 2, std140) uniform SkySceneData {
 	float z_far; // 4 - 52
 	uint directional_light_count; // 4 - 56
 	bool fog_use_legacy_blending; // 4 - 60
-	uint pad1; // 4 - 64
+	uint volumetric_fog_grid; // 4 - 64 The fog on a grid around the camera, marched per pixel (volumetric_fog_inv_length: over its half extent).
 }
 sky_scene_data;
 
@@ -160,6 +160,53 @@ vec4 volumetric_fog_process(vec2 screen_uv) {
 	return texture(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), fog_pos);
 }
 
+#define VOLUMETRIC_FOG_INV_HALF_EXTENT sky_scene_data.volumetric_fog_inv_length
+#define VOLUMETRIC_FOG_INV_SPREAD sky_scene_data.volumetric_fog_detail_spread
+
+// The fog on a grid (sky_scene_data.volumetric_fog_grid; a render of more than two views, a probe's faces): a
+// cube around the camera (in its space) of half extent 1 / volumetric_fog_inv_length, each axis's cells spread out
+// from the centre by the frustum's spread. Marched along the ray from the eye to the point, through the cube, as an
+// ordinary camera's slices are integrated along its depth: in-scattered light and transmittance.
+vec3 volumetric_fog_grid_uvw(vec3 p_pos) {
+	vec3 t = clamp(p_pos * VOLUMETRIC_FOG_INV_HALF_EXTENT, -1.0, 1.0);
+	return sign(t) * pow(abs(t), vec3(VOLUMETRIC_FOG_INV_SPREAD)) * 0.5 + 0.5;
+}
+
+vec4 volumetric_fog_march(vec3 p_from, vec3 p_to) {
+	vec3 ray = p_to - p_from;
+	float len = length(ray);
+	if (len < 1e-6) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	vec3 dir = ray / len;
+	// Up to where the ray leaves the cube.
+	float half_extent = 1.0 / VOLUMETRIC_FOG_INV_HALF_EXTENT;
+	vec3 safe_dir = mix(dir, vec3(1e-6), lessThan(abs(dir), vec3(1e-6)));
+	vec3 exits = (sign(safe_dir) * half_extent - p_from) / safe_dir;
+	float t_end = min(len, min(exits.x, min(exits.y, exits.z)));
+	if (t_end <= 0.0) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	// A step a cell on the axis the ray crosses most cells of (twice that), spaced as the cells spread from the eye.
+	float cells = float(textureSize(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), 0).x);
+	vec3 crossed = abs(volumetric_fog_grid_uvw(p_from + dir * t_end) - volumetric_fog_grid_uvw(p_from)) * cells;
+	int steps = clamp(int(ceil(2.0 * max(crossed.x, max(crossed.y, crossed.z)))), 1, int(cells) * 4);
+	float spread = 1.0 / VOLUMETRIC_FOG_INV_SPREAD;
+
+	vec4 accum = vec4(0.0, 0.0, 0.0, 1.0);
+	float prev_t = 0.0;
+	for (int i = 0; i < steps; i++) {
+		float t = t_end * pow(float(i + 1) / float(steps), spread);
+		float d = t - prev_t;
+		vec4 fog = textureLod(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), volumetric_fog_grid_uvw(p_from + dir * (0.5 * (prev_t + t))), 0.0);
+		float transmittance = exp(-d * fog.a);
+		accum.rgb += ((fog.rgb - fog.rgb * transmittance) / max(fog.a, 0.00001)) * accum.a;
+		accum.a *= transmittance;
+		prev_t = t;
+	}
+	return clamp(accum, vec4(0.0), vec4(65504.0));
+}
+
 vec4 fog_process(vec3 view, vec3 sky_color) {
 	vec3 fog_color = mix(sky_scene_data.fog_light_color, sky_color, sky_scene_data.fog_aerial_perspective);
 
@@ -205,6 +252,8 @@ float atan2_approx(float y, float x) {
 void main() {
 	vec2 uv = uv_interp * 0.5 + 0.5;
 	vec3 cube_normal;
+	vec3 view_eye = vec3(0.0); // The view's eye and direction in the camera's space (for the fog on a grid).
+	vec3 view_dir = vec3(0.0, 0.0, -1.0);
 #ifdef USE_CUBEMAP_PASS
 	cube_normal = oct_to_vec3_with_border(uv, params.border_size.y);
 #else
@@ -220,6 +269,10 @@ void main() {
 	cube_normal.z = -1.0;
 	cube_normal.x = (uv_interp.x + params.projection.x) / params.projection.y;
 	cube_normal.y = (uv_interp.y + params.projection.z) / params.projection.w;
+#endif
+	view_dir = normalize(cube_normal);
+#ifdef USE_MULTIVIEW
+	view_eye = sky_scene_data.view_eye_offsets[ViewIndex].xyz;
 #endif
 	cube_normal = mat3(params.orientation) * cube_normal;
 	cube_normal = normalize(cube_normal);
@@ -288,7 +341,7 @@ void main() {
 
 #if !defined(USE_CUBEMAP_PASS)
 	if (sky_scene_data.volumetric_fog_enabled) {
-		vec4 fog = volumetric_fog_process(uv);
+		vec4 fog = sky_scene_data.volumetric_fog_grid != 0u ? volumetric_fog_march(view_eye, view_eye + view_dir * 1e6) : volumetric_fog_process(uv);
 		if (sky_scene_data.fog_use_legacy_blending) {
 			frag_color.rgb = mix(frag_color.rgb, fog.rgb, (1.0 - fog.a) * sky_scene_data.volumetric_fog_sky_affect);
 		} else {

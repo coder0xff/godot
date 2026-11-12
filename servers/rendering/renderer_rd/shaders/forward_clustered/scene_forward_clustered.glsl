@@ -1128,6 +1128,53 @@ vec4 volumetric_fog_process(vec2 screen_uv, float z) {
 	return texture(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), fog_pos);
 }
 
+#define VOLUMETRIC_FOG_INV_HALF_EXTENT implementation_data.volumetric_fog_inv_length
+#define VOLUMETRIC_FOG_INV_SPREAD implementation_data.volumetric_fog_detail_spread
+
+// The fog on a grid (implementation_data.volumetric_fog_grid; a render of more than two views, a probe's faces): a
+// cube around the camera (in its space) of half extent 1 / volumetric_fog_inv_length, each axis's cells spread out
+// from the centre by the frustum's spread. Marched along the ray from the eye to the point, through the cube, as an
+// ordinary camera's slices are integrated along its depth: in-scattered light and transmittance.
+vec3 volumetric_fog_grid_uvw(vec3 p_pos) {
+	vec3 t = clamp(p_pos * VOLUMETRIC_FOG_INV_HALF_EXTENT, -1.0, 1.0);
+	return sign(t) * pow(abs(t), vec3(VOLUMETRIC_FOG_INV_SPREAD)) * 0.5 + 0.5;
+}
+
+vec4 volumetric_fog_march(vec3 p_from, vec3 p_to) {
+	vec3 ray = p_to - p_from;
+	float len = length(ray);
+	if (len < 1e-6) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	vec3 dir = ray / len;
+	// Up to where the ray leaves the cube.
+	float half_extent = 1.0 / VOLUMETRIC_FOG_INV_HALF_EXTENT;
+	vec3 safe_dir = mix(dir, vec3(1e-6), lessThan(abs(dir), vec3(1e-6)));
+	vec3 exits = (sign(safe_dir) * half_extent - p_from) / safe_dir;
+	float t_end = min(len, min(exits.x, min(exits.y, exits.z)));
+	if (t_end <= 0.0) {
+		return vec4(0.0, 0.0, 0.0, 1.0);
+	}
+	// A step a cell on the axis the ray crosses most cells of (twice that), spaced as the cells spread from the eye.
+	float cells = float(textureSize(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), 0).x);
+	vec3 crossed = abs(volumetric_fog_grid_uvw(p_from + dir * t_end) - volumetric_fog_grid_uvw(p_from)) * cells;
+	int steps = clamp(int(ceil(2.0 * max(crossed.x, max(crossed.y, crossed.z)))), 1, int(cells) * 4);
+	float spread = 1.0 / VOLUMETRIC_FOG_INV_SPREAD;
+
+	vec4 accum = vec4(0.0, 0.0, 0.0, 1.0);
+	float prev_t = 0.0;
+	for (int i = 0; i < steps; i++) {
+		float t = t_end * pow(float(i + 1) / float(steps), spread);
+		float d = t - prev_t;
+		vec4 fog = textureLod(sampler3D(volumetric_fog_texture, SAMPLER_LINEAR_CLAMP), volumetric_fog_grid_uvw(p_from + dir * (0.5 * (prev_t + t))), 0.0);
+		float transmittance = exp(-d * fog.a);
+		accum.rgb += ((fog.rgb - fog.rgb * transmittance) / max(fog.a, 0.00001)) * accum.a;
+		accum.a *= transmittance;
+		prev_t = t;
+	}
+	return clamp(accum, vec4(0.0), vec4(65504.0));
+}
+
 vec4 fog_process(vec3 vertex) {
 	vec3 fog_color = scene_data_block.data.fog_light_color;
 
@@ -1584,11 +1631,24 @@ void fragment_shader(in SceneData scene_data) {
 	}
 
 	if (implementation_data.volumetric_fog_enabled) {
-#ifdef USE_MULTIVIEW
-		vec4 volumetric_fog = volumetric_fog_process(combined_uv, -vertex.z);
+		vec4 volumetric_fog;
+		if (implementation_data.volumetric_fog_grid != 0u) {
+#if defined(MODE_CAPTURE)
+			// The fragment and its face's eye (the probe) in the reference space, the camera's.
+			const mat4 fog_reference_from_view = capture_layers.data[capture_layer_interp].reference_from_view;
+			volumetric_fog = volumetric_fog_march(fog_reference_from_view[3].xyz, (fog_reference_from_view * vec4(vertex, 1.0)).xyz);
+#elif defined(USE_MULTIVIEW)
+			volumetric_fog = volumetric_fog_march(eye_offset, vertex);
 #else
-		vec4 volumetric_fog = volumetric_fog_process(screen_uv, -vertex.z);
+			volumetric_fog = volumetric_fog_march(vec3(0.0), vertex);
 #endif
+		} else {
+#ifdef USE_MULTIVIEW
+			volumetric_fog = volumetric_fog_process(combined_uv, -vertex.z);
+#else
+			volumetric_fog = volumetric_fog_process(screen_uv, -vertex.z);
+#endif
+		}
 		vec4 res = vec4(0.0);
 		if (bool(scene_data.flags & SCENE_DATA_FLAGS_USE_FOG)) {
 			//must use the full blending equation here to blend fogs

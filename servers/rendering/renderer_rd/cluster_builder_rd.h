@@ -459,6 +459,7 @@ public:
 	void debug(ElementType p_element);
 
 	RID get_cluster_buffer() const;
+	RID get_layer_buffer() const { return layer_buffer; } // The layers' projections (set_layers), with more than one.
 	uint32_t get_cluster_size() const;
 	uint32_t get_max_cluster_elements() const;
 

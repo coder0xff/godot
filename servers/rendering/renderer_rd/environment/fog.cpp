@@ -610,7 +610,7 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 		params.fog_volume_size[1] = fog->height;
 		params.fog_volume_size[2] = fog->depth;
 
-		params.use_temporal_reprojection = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env);
+		params.use_temporal_reprojection = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env) && !fog->grid;
 		params.temporal_frame = RSG::rasterizer->get_frame_number() % VolumetricFog::MAX_TEMPORAL_FRAMES;
 		params.detail_spread = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_detail_spread(p_settings.env);
 		params.temporal_blend = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection_amount(p_settings.env);
@@ -618,6 +618,11 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 		Transform3D to_prev_cam_view = p_prev_cam_inv_transform * p_cam_transform;
 		RendererRD::MaterialStorage::store_transform(to_prev_cam_view, params.to_prev_view);
 		RendererRD::MaterialStorage::store_transform(p_cam_transform, params.transform);
+
+		params.grid_mode = fog->grid ? 1 : 0;
+		params.grid_half_extent = fog->grid_half_extent;
+		params.pad_grid[0] = 0.0;
+		params.pad_grid[1] = 0.0;
 
 		RD::get_singleton()->buffer_update(volumetric_fog.volume_ubo, 0, sizeof(VolumetricFogShader::VolumeUBO), &params);
 
@@ -700,7 +705,26 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 			RSE::FogVolumeShape volume_type = RendererRD::Fog::get_singleton()->fog_volume_get_shape(fog_volume);
 			Vector3 extents = RendererRD::Fog::get_singleton()->fog_volume_get_size(fog_volume) / 2;
 
-			if (volume_type != RSE::FOG_VOLUME_SHAPE_WORLD) {
+			if (volume_type != RSE::FOG_VOLUME_SHAPE_WORLD && fog->grid) {
+				// Local fog volume, on the grid: the cells its box's corners (in the camera's space) span on each axis.
+				const float spread = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_detail_spread(p_settings.env);
+				const Transform3D to_view = p_cam_transform.affine_inverse() * fog_volume_instance->transform;
+				AABB box = to_view.xform(AABB(-extents, extents * 2.0));
+				const int32_t cells[3] = { int32_t(fog->width), int32_t(fog->height), int32_t(fog->depth) };
+				for (int a = 0; a < 3; a++) {
+					float lo = box.position[a];
+					float hi = box.position[a] + box.size[a];
+					// A position to its grid coordinate: s = sign(p)·|p/half|^(1/spread), in [-1, 1], to [0, cells].
+					auto to_cell = [&](float p_pos) {
+						float t = CLAMP(p_pos / fog->grid_half_extent, -1.0f, 1.0f);
+						float s = SIGN(t) * Math::pow(Math::abs(t), 1.0f / spread);
+						return (s * 0.5f + 0.5f) * float(cells[a]);
+					};
+					froxel_min[a] = CLAMP(int32_t(Math::floor(to_cell(lo))) - 1, 0, cells[a]);
+					froxel_max[a] = CLAMP(int32_t(Math::ceil(to_cell(hi))) + 1, 0, cells[a]);
+				}
+				kernel_size = froxel_max - froxel_min;
+			} else if (volume_type != RSE::FOG_VOLUME_SHAPE_WORLD) {
 				// Local fog volume.
 				Vector3 fog_size = Vector3(fog->width, fog->height, fog->depth);
 				float volumetric_fog_detail_spread = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_detail_spread(p_settings.env);
@@ -1006,6 +1030,16 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 			copy_uniforms.push_back(u);
 		}
 
+		{
+			RD::Uniform u;
+			u.uniform_type = RD::UNIFORM_TYPE_STORAGE_BUFFER;
+			u.binding = 22;
+			RID layer_buffer = p_settings.cluster_builder->get_layer_buffer();
+			u.append_id(layer_buffer.is_valid() ? layer_buffer : p_settings.cluster_builder->get_cluster_buffer()); // Unread with one layer.
+			uniforms.push_back(u);
+			copy_uniforms.push_back(u);
+		}
+
 		if (fog->copy_uniform_set.is_valid() && RD::get_singleton()->uniform_set_is_valid(fog->copy_uniform_set)) {
 			RD::get_singleton()->free_rid(fog->copy_uniform_set);
 		}
@@ -1138,7 +1172,7 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 	Transform3D to_prev_cam_view = p_prev_cam_inv_transform * p_cam_transform;
 	RendererRD::MaterialStorage::store_transform(to_prev_cam_view, params.to_prev_view);
 
-	params.use_temporal_reprojection = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env);
+	params.use_temporal_reprojection = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env) && !fog->grid;
 	params.temporal_blend = RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection_amount(p_settings.env);
 
 	RID sky_rid = RendererSceneRenderRD::get_singleton()->environment_get_sky(p_settings.env);
@@ -1155,8 +1189,12 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 		uint32_t cluster_screen_width = Math::division_round_up((uint32_t)p_settings.rb_size.x, cluster_size);
 		uint32_t cluster_screen_height = Math::division_round_up((uint32_t)p_settings.rb_size.y, cluster_size);
 		params.max_cluster_element_count_div_32 = p_settings.max_cluster_elements / 32;
-		params.cluster_type_size = cluster_screen_width * cluster_screen_height * (params.max_cluster_element_count_div_32 + 32);
+		params.cluster_type_size = cluster_screen_width * cluster_screen_height * (params.max_cluster_element_count_div_32 + 32) * MAX(p_settings.cluster_layers, 1u); // Every layer's grid.
 		params.cluster_width = cluster_screen_width;
+		params.cluster_layer_count = MAX(p_settings.cluster_layers, 1u);
+		params.cluster_layer_z_far = p_settings.cluster_layer_z_far;
+		params.grid_mode = fog->grid ? 1 : 0;
+		params.grid_half_extent = fog->grid_half_extent;
 
 		params.screen_size[0] = p_settings.rb_size.x;
 		params.screen_size[1] = p_settings.rb_size.y;
@@ -1184,7 +1222,7 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 	RD::get_singleton()->compute_list_add_barrier(compute_list);
 
 	// Copy fog to history buffer
-	if (RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env)) {
+	if (RendererSceneRenderRD::get_singleton()->environment_get_volumetric_fog_temporal_reprojection(p_settings.env) && !fog->grid) {
 		RD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, volumetric_fog.process_pipelines[VolumetricFogShader::VOLUMETRIC_FOG_PROCESS_SHADER_COPY].get_rid());
 		RD::get_singleton()->compute_list_bind_uniform_set(compute_list, fog->copy_uniform_set, 0);
 		RD::get_singleton()->compute_list_dispatch_threads(compute_list, fog->width, fog->height, fog->depth);
@@ -1213,6 +1251,25 @@ void Fog::volumetric_fog_update(const VolumetricFogSettings &p_settings, const P
 		RD::get_singleton()->compute_list_dispatch_threads(compute_list, fog->width, fog->height, fog->depth);
 
 		RD::get_singleton()->compute_list_add_barrier(compute_list);
+
+		if (fog->grid) {
+			// The grid's third axis (the frustum's depth is integrated, not filtered): into the fog map, which the
+			// scene and sky shaders march.
+			RD::get_singleton()->compute_list_end();
+			params.filter_axis = 2;
+			RD::get_singleton()->buffer_update(volumetric_fog.params_ubo, 0, sizeof(VolumetricFogShader::ParamsUBO), &params);
+			compute_list = RD::get_singleton()->compute_list_begin();
+			RD::get_singleton()->compute_list_bind_compute_pipeline(compute_list, volumetric_fog.process_pipelines[VolumetricFogShader::VOLUMETRIC_FOG_PROCESS_SHADER_FILTER].get_rid());
+			RD::get_singleton()->compute_list_bind_uniform_set(compute_list, fog->gi_dependent_sets.process_uniform_set, 0);
+			RD::get_singleton()->compute_list_dispatch_threads(compute_list, fog->width, fog->height, fog->depth);
+			RD::get_singleton()->compute_list_end();
+			RD::get_singleton()->draw_command_end_label();
+
+			RENDER_TIMESTAMP("< Volumetric Fog");
+			RD::get_singleton()->draw_command_end_label();
+			RD::get_singleton()->draw_command_end_label();
+			return;
+		}
 		RD::get_singleton()->draw_command_end_label();
 	}
 

@@ -65,6 +65,10 @@ layout(set = 1, binding = 2, std140) uniform SceneParams {
 
 	mat4 to_prev_view;
 	mat4 transform;
+
+	uint grid_mode; // A render of more than two views (a probe's faces): the cells on a cube around the camera.
+	float grid_half_extent;
+	vec2 pad_grid;
 }
 scene_params;
 
@@ -133,11 +137,18 @@ void main() {
 	fog_unit_pos.z = pow(fog_unit_pos.z, scene_params.detail_spread);
 
 	vec3 view_pos;
-	view_pos.xy = (fog_unit_pos.xy * 2.0 - 1.0) * mix(scene_params.fog_frustum_size_begin, scene_params.fog_frustum_size_end, vec2(fog_unit_pos.z));
-	view_pos.z = -scene_params.fog_frustum_end * fog_unit_pos.z;
-	view_pos.y = -view_pos.y;
+	if (scene_params.grid_mode != 0u) {
+		// The grid: a cube around the camera (in its space), each axis's cells spread out from the centre as the
+		// frustum's slices are along its depth. No temporal reprojection.
+		vec3 s = (posf * fog_cell_size + fog_cell_size * 0.5) * 2.0 - 1.0;
+		view_pos = sign(s) * pow(abs(s), vec3(scene_params.detail_spread)) * scene_params.grid_half_extent;
+	} else {
+		view_pos.xy = (fog_unit_pos.xy * 2.0 - 1.0) * mix(scene_params.fog_frustum_size_begin, scene_params.fog_frustum_size_end, vec2(fog_unit_pos.z));
+		view_pos.z = -scene_params.fog_frustum_end * fog_unit_pos.z;
+		view_pos.y = -view_pos.y;
+	}
 
-	if (scene_params.use_temporal_reprojection) {
+	if (scene_params.use_temporal_reprojection && scene_params.grid_mode == 0u) {
 		vec3 prev_view = (scene_params.to_prev_view * vec4(view_pos, 1.0)).xyz;
 		//undo transform into prev view
 		prev_view.y = -prev_view.y;

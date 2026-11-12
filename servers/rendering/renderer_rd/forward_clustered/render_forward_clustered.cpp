@@ -791,6 +791,7 @@ uint32_t RenderForwardClustered::_setup_environment(const RenderDataRD *p_render
 
 	scene_state.ubo.gi_upscale_for_msaa = false;
 	scene_state.ubo.volumetric_fog_enabled = false;
+	scene_state.ubo.volumetric_fog_grid = 0;
 
 	if (rd.is_valid()) {
 		if (rd->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED) {
@@ -801,7 +802,8 @@ uint32_t RenderForwardClustered::_setup_environment(const RenderDataRD *p_render
 			Ref<RendererRD::Fog::VolumetricFog> fog = rd->get_custom_data(RB_SCOPE_FOG);
 
 			scene_state.ubo.volumetric_fog_enabled = true;
-			float fog_end = fog->length;
+			scene_state.ubo.volumetric_fog_grid = fog->grid ? 1 : 0;
+			float fog_end = fog->grid ? fog->grid_half_extent : fog->length; // With the grid, its half extent.
 			if (fog_end > 0.0) {
 				scene_state.ubo.volumetric_fog_inv_length = 1.0 / fog_end;
 			} else {
@@ -1399,7 +1401,7 @@ void RenderForwardClustered::_debug_draw_cluster(Ref<RenderSceneBuffersRD> p_ren
 ////////////////////////////////////////////////////////////////////////////////
 // FOG SHADER
 
-void RenderForwardClustered::_update_volumetric_fog(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const Projection &p_cam_projection, const Transform3D &p_cam_transform, const Transform3D &p_prev_cam_inv_transform, RID p_shadow_atlas, int p_directional_light_count, bool p_use_directional_shadows, int p_positional_light_count, int p_voxel_gi_count, const PagedArray<RID> &p_fog_volumes) {
+void RenderForwardClustered::_update_volumetric_fog(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_environment, const Projection &p_cam_projection, const Transform3D &p_cam_transform, const Transform3D &p_prev_cam_inv_transform, RID p_shadow_atlas, int p_directional_light_count, bool p_use_directional_shadows, int p_positional_light_count, int p_voxel_gi_count, const PagedArray<RID> &p_fog_volumes, float p_grid_half_extent) {
 	ERR_FAIL_COND(p_render_buffers.is_null());
 
 	Ref<RenderBufferDataForwardClustered> rb_data = p_render_buffers->get_custom_data(RB_SCOPE_FORWARD_CLUSTERED);
@@ -1417,11 +1419,19 @@ void RenderForwardClustered::_update_volumetric_fog(Ref<RenderSceneBuffersRD> p_
 	float ratio = float(size.x) / float((size.x + size.y) / 2);
 	uint32_t target_width = uint32_t(float(get_volumetric_fog_size()) * ratio);
 	uint32_t target_height = uint32_t(float(get_volumetric_fog_size()) / ratio);
+	uint32_t target_depth = get_volumetric_fog_depth();
+	const bool grid = p_grid_half_extent > 0.0;
+	if (grid) {
+		// The fog on a grid (Fog::VolumetricFog::grid): a cube of the larger of the volume's size and depth a side.
+		target_width = MAX(uint32_t(get_volumetric_fog_size()), target_depth);
+		target_height = target_width;
+		target_depth = target_width;
+	}
 
 	if (p_render_buffers->has_custom_data(RB_SCOPE_FOG)) {
 		Ref<RendererRD::Fog::VolumetricFog> fog = p_render_buffers->get_custom_data(RB_SCOPE_FOG);
 		//validate
-		if (p_environment.is_null() || !environment_get_volumetric_fog_enabled(p_environment) || fog->width != target_width || fog->height != target_height || fog->depth != get_volumetric_fog_depth()) {
+		if (p_environment.is_null() || !environment_get_volumetric_fog_enabled(p_environment) || fog->width != target_width || fog->height != target_height || fog->depth != target_depth) {
 			p_render_buffers->set_custom_data(RB_SCOPE_FOG, Ref<RenderBufferCustomDataRD>());
 		}
 	}
@@ -1436,7 +1446,7 @@ void RenderForwardClustered::_update_volumetric_fog(Ref<RenderSceneBuffersRD> p_
 		Ref<RendererRD::Fog::VolumetricFog> fog;
 
 		fog.instantiate();
-		fog->init(Vector3i(target_width, target_height, get_volumetric_fog_depth()), sky.sky_shader.default_shader_rd);
+		fog->init(Vector3i(target_width, target_height, target_depth), sky.sky_shader.default_shader_rd);
 
 		p_render_buffers->set_custom_data(RB_SCOPE_FOG, fog);
 	}
@@ -1463,6 +1473,10 @@ void RenderForwardClustered::_update_volumetric_fog(Ref<RenderSceneBuffersRD> p_
 
 		settings.vfog = fog;
 		settings.cluster_builder = rb_data->cluster_builder;
+		settings.cluster_layers = MAX(cluster_layers, 1u);
+		settings.cluster_layer_z_far = cluster_layers_z_far;
+		fog->grid = grid;
+		fog->grid_half_extent = p_grid_half_extent;
 		settings.rbgi = rbgi;
 		settings.sdfgi = sdfgi;
 		settings.env = p_environment;
@@ -1831,7 +1845,17 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 	if (rb_data.is_valid()) {
 		RENDER_TIMESTAMP("Update Volumetric Fog");
 		bool directional_shadows = RendererRD::LightStorage::get_singleton()->has_directional_shadows(directional_light_count);
-		_update_volumetric_fog(rb, p_render_data->environment, p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform, p_render_data->scene_data->prev_cam_transform.affine_inverse(), p_render_data->shadow_atlas, directional_light_count, directional_shadows, positional_light_count, p_render_data->voxel_gi_count, *p_render_data->fog_volumes);
+		// With the clusters by view (a render of more than two views, a probe's faces), the fog on a grid around the
+		// camera: as far as the fog's length past the farthest eye.
+		float grid_half_extent = 0.0;
+		if (cluster_layers > 1 && is_environment(p_render_data->environment)) {
+			float eye_reach = 0.0;
+			for (uint32_t v = 0; v < p_render_data->scene_data->view_count; v++) {
+				eye_reach = MAX(eye_reach, p_render_data->scene_data->view_eye_offset[v].length());
+			}
+			grid_half_extent = MAX(environment_get_volumetric_fog_length(p_render_data->environment), 0.01f) + eye_reach;
+		}
+		_update_volumetric_fog(rb, p_render_data->environment, p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform, p_render_data->scene_data->prev_cam_transform.affine_inverse(), p_render_data->shadow_atlas, directional_light_count, directional_shadows, positional_light_count, p_render_data->voxel_gi_count, *p_render_data->fog_volumes, grid_half_extent);
 	}
 }
 
@@ -3954,7 +3978,7 @@ RID RenderForwardClustered::_setup_render_pass_uniform_set(RenderListType p_rend
 			rb_data = rb->get_custom_data(RB_SCOPE_FORWARD_CLUSTERED);
 		}
 	}
-	// The volumetric fog's: the capture pass's too.
+	// The volumetric fog's: the capture pass's too (on the grid, marched per pixel, it fits every view alike).
 	Ref<RenderSceneBuffersRD> fog_rb = rb_data.is_valid() ? rb : Ref<RenderSceneBuffersRD>();
 	if (capture_render_pass) {
 		// The capture pass's set: single-view, its screen textures the defaults (the volumetric fog's excepted).

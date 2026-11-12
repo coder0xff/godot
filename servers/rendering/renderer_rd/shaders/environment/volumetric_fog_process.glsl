@@ -191,8 +191,19 @@ layout(set = 0, binding = 15, std140) uniform Params {
 	mat4 to_prev_view;
 
 	mat3 radiance_inverse_xform;
+
+	uint cluster_layer_count; // Past 1: the clusters by view (a grid a view, layers at binding 22).
+	float cluster_layer_z_far;
+	uint grid_mode; // A render of more than two views (a probe's faces): the cells on a cube around the camera.
+	float grid_half_extent;
 }
 params;
+
+// The clusters by view: each view's projection from the camera's space (as the cluster builder's).
+layout(set = 0, binding = 22, std430) restrict readonly buffer ClusterLayers {
+	mat4 data[];
+}
+cluster_layers;
 #ifndef MODE_COPY
 layout(set = 0, binding = 16) uniform texture3D prev_density_texture;
 
@@ -318,14 +329,21 @@ void main() {
 	fog_unit_pos.z = pow(fog_unit_pos.z, params.detail_spread);
 
 	vec3 view_pos;
-	view_pos.xy = (fog_unit_pos.xy * 2.0 - 1.0) * mix(params.fog_frustum_size_begin, params.fog_frustum_size_end, vec2(fog_unit_pos.z));
-	view_pos.z = -params.fog_frustum_end * fog_unit_pos.z;
-	view_pos.y = -view_pos.y;
+	if (params.grid_mode != 0u) {
+		// The grid: a cube around the camera (in its space), each axis's cells spread out from the centre as the
+		// frustum's slices are along its depth.
+		vec3 s = (posf * fog_cell_size + fog_cell_size * 0.5) * 2.0 - 1.0;
+		view_pos = sign(s) * pow(abs(s), vec3(params.detail_spread)) * params.grid_half_extent;
+	} else {
+		view_pos.xy = (fog_unit_pos.xy * 2.0 - 1.0) * mix(params.fog_frustum_size_begin, params.fog_frustum_size_end, vec2(fog_unit_pos.z));
+		view_pos.z = -params.fog_frustum_end * fog_unit_pos.z;
+		view_pos.y = -view_pos.y;
+	}
 
 	vec4 reprojected_density = vec4(0.0);
 	float reproject_amount = 0.0;
 
-	if (params.use_temporal_reprojection) {
+	if (params.use_temporal_reprojection && params.grid_mode == 0u) {
 		vec3 prev_view = (params.to_prev_view * vec4(view_pos, 1.0)).xyz;
 		//undo transform into prev view
 		prev_view.y = -prev_view.y;
@@ -362,6 +380,21 @@ void main() {
 	}
 
 	uint cluster_z = uint(clamp((abs(view_pos.z) / params.z_far) * 32.0, 0.0, 31.0));
+	if (params.cluster_layer_count > 1u) {
+		// The clusters by view: the cell's lights from the first view that sees it, in that view's pixels and depth
+		// (every point around the camera is in some view of a probe's faces).
+		uint layer_cells = params.cluster_type_size / (params.max_cluster_element_count_div_32 + 32) / params.cluster_layer_count;
+		for (uint l = 0u; l < params.cluster_layer_count; l++) {
+			vec4 clip = cluster_layers.data[l] * vec4(view_pos, 1.0);
+			if (clip.w > 0.0 && all(lessThanEqual(abs(clip.xy), vec2(clip.w)))) {
+				uvec2 layer_pixel = min(uvec2((clip.xy / clip.w * 0.5 + 0.5) * params.screen_size), uvec2(params.screen_size) - uvec2(1));
+				uvec2 layer_cluster = layer_pixel >> params.cluster_shift;
+				cluster_offset = (l * layer_cells + params.cluster_width * layer_cluster.y + layer_cluster.x) * (params.max_cluster_element_count_div_32 + 32);
+				cluster_z = uint(clamp((clip.w / params.cluster_layer_z_far) * 32.0, 0.0, 31.0));
+				break;
+			}
+		}
+	}
 
 	vec3 total_light = vec3(0.0);
 
@@ -400,7 +433,7 @@ void main() {
 				vec3 shadow_attenuation = vec3(1.0);
 
 				if (directional_lights.data[i].shadow_opacity > 0.001) {
-					float depth_z = -view_pos.z;
+					float depth_z = params.cluster_layer_count > 1u ? length(view_pos) : -view_pos.z; // As the scene's (DIRECTIONAL_SHADOW_DEPTH).
 
 					vec4 pssm_coord;
 					vec3 light_dir = directional_lights.data[i].direction;
@@ -431,7 +464,7 @@ void main() {
 					float depth = texture(sampler2D(directional_shadow_atlas, linear_sampler), pssm_coord.xy).r;
 					float shadow = exp(min(0.0, (pssm_coord.z - depth)) * z_range * INV_FOG_FADE);
 
-					shadow = mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, view_pos.z)); //done with negative values for performance
+					shadow = mix(shadow, 1.0, smoothstep(directional_lights.data[i].fade_from, directional_lights.data[i].fade_to, -depth_z)); //done with negative values for performance
 
 					shadow_attenuation = mix(vec3(1.0 - directional_lights.data[i].shadow_opacity), vec3(1.0), shadow);
 				}
@@ -828,6 +861,14 @@ void main() {
 
 	if (any(greaterThanEqual(pos, params.fog_volume_size))) {
 		return; //do not compute
+	}
+
+	if (params.grid_mode != 0u) {
+		// The grid is marched per pixel (along the ray from the view's eye); its cells as they are.
+		for (int i = 0; i < params.fog_volume_size.z; i++) {
+			imageStore(fog_map, pos + ivec3(0, 0, i), imageLoad(density_map, pos + ivec3(0, 0, i)));
+		}
+		return;
 	}
 
 	vec4 fog_accum = vec4(0.0, 0.0, 0.0, 1.0);

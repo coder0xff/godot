@@ -432,7 +432,7 @@ struct ImplementationData {
 	mat4 sdf_to_bounds;
 
 	ivec3 sdf_offset;
-	uint pad2;
+	uint volumetric_fog_grid; // the fog on a grid around the camera, marched per pixel (volumetric_fog_inv_length: over its half extent)
 
 	ivec3 sdf_size;
 	bool gi_upscale_for_msaa;
