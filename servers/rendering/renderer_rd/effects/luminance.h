@@ -52,10 +52,12 @@ private:
 	};
 	Metering metering = METERING_MEAN;
 	float clip_factor = 8.0;
+	float anchor_factor = 1.0 / 64.0;
 	enum {
 		LUMINANCE_LOG_AVERAGE = 1,
 		LUMINANCE_LAST = 2,
 		LUMINANCE_CLIP = 4,
+		LUMINANCE_ANCHOR = 8,
 	};
 
 	enum LuminanceReduceMode {
@@ -72,7 +74,7 @@ private:
 		float exposure_adjust;
 		uint32_t flags; // LUMINANCE_LOG_AVERAGE, LUMINANCE_LAST, LUMINANCE_CLIP.
 		float clip_factor;
-		float pad;
+		float anchor_factor;
 	};
 
 	struct LuminanceReduce {

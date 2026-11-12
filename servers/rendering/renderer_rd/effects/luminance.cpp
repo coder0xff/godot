@@ -41,6 +41,7 @@ Luminance::Luminance(bool p_prefer_raster_effects) {
 	prefer_raster_effects = p_prefer_raster_effects;
 	metering = Metering(int(GLOBAL_GET("rendering/environment/auto_exposure/metering")));
 	clip_factor = Math::pow(2.0, double(GLOBAL_GET("rendering/environment/auto_exposure/clip_stops")));
+	anchor_factor = Math::pow(2.0, -double(GLOBAL_GET("rendering/environment/auto_exposure/anchor_stops")));
 
 	if (prefer_raster_effects) {
 		Vector<String> luminance_reduce_modes;
@@ -96,7 +97,9 @@ void Luminance::LuminanceBuffers::configure(RenderSceneBuffersRD *p_render_buffe
 		h = MAX(h / 8, 1);
 
 		RD::TextureFormat tf;
-		tf.format = RD::DATA_FORMAT_R32_SFLOAT;
+		// The compute path carries two values (the metered luminance and the plain mean, for the clipped mean's anchor);
+		// the luminance read by the tonemapper is the first.
+		tf.format = prefer_raster_effects ? RD::DATA_FORMAT_R32_SFLOAT : RD::DATA_FORMAT_R32G32_SFLOAT;
 		tf.width = w;
 		tf.height = h;
 
@@ -213,6 +216,7 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 		push_constant.min_luminance = p_min_luminance;
 		push_constant.exposure_adjust = p_adjust;
 		push_constant.clip_factor = clip_factor;
+		push_constant.anchor_factor = anchor_factor;
 		const bool log_average = metering == METERING_LOG_AVERAGE;
 		// The clipped mean needs the eye's adaptation, which a reset (p_set) does not have yet.
 		const bool clip = metering == METERING_CLIPPED_MEAN && !p_set;
@@ -251,7 +255,7 @@ void Luminance::luminance_reduction(RID p_source_texture, const Size2i p_source_
 			RD::Uniform u_reduce_texture(RD::UNIFORM_TYPE_IMAGE, 0, p_luminance_buffers->reduce[i]);
 			RD::get_singleton()->compute_list_bind_uniform_set(compute_list, uniform_set_cache->get_cache(shader, 1, u_reduce_texture), 1);
 
-			push_constant.flags = (log_average ? LUMINANCE_LOG_AVERAGE : 0) | (i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_LAST : 0) | (clip && i == 0 ? LUMINANCE_CLIP : 0);
+			push_constant.flags = (log_average ? LUMINANCE_LOG_AVERAGE : 0) | (i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_LAST : 0) | (clip && i == 0 ? LUMINANCE_CLIP : 0) | (metering == METERING_CLIPPED_MEAN && i == p_luminance_buffers->reduce.size() - 1 ? LUMINANCE_ANCHOR : 0);
 			RD::get_singleton()->compute_list_set_push_constant(compute_list, &push_constant, sizeof(LuminanceReducePushConstant));
 
 			RD::get_singleton()->compute_list_dispatch_threads(compute_list, push_constant.source_size[0], push_constant.source_size[1], 1);

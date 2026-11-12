@@ -2952,6 +2952,9 @@
 		<member name="rendering/driver/threads/thread_model" type="int" setter="" getter="" default="1" experimental="This setting has several known bugs which can lead to crashing, especially when using particles or resizing the window. Not recommended for use in production at this stage.">
 			The thread model to use for rendering. Rendering on a thread may improve performance, but synchronizing to the main thread can cause a bit more jitter.
 		</member>
+		<member name="rendering/environment/auto_exposure/anchor_stops" type="float" setter="" getter="" default="6.0">
+			With [member rendering/environment/auto_exposure/metering] set to Clipped Mean, the most the clipped mean may read below the plain mean, in stops. Without it, a frame that is nearly all black with a few bright pixels would run the clipped mean's adaptation down to [member CameraAttributes.auto_exposure_min_sensitivity]'s floor and blow the bright pixels out.
+		</member>
 		<member name="rendering/environment/auto_exposure/clip_stops" type="float" setter="" getter="" default="3.0">
 			With [member rendering/environment/auto_exposure/metering] set to Clipped Mean, how far above the luminance the eye is adapted to a pixel is clipped before it is metered, in stops.
 		</member>

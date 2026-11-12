@@ -3695,6 +3695,8 @@ void RenderingServer::init() {
 	// area darkens the rest of the frame only a little.
 	GLOBAL_DEF_RST(PropertyInfo(Variant::INT, "rendering/environment/auto_exposure/metering", PROPERTY_HINT_ENUM, "Mean,Log Average,Clipped Mean"), 0);
 	GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/environment/auto_exposure/clip_stops", PROPERTY_HINT_RANGE, "0,16,0.1"), 3.0);
+	// The clipped mean reads at most this many stops below the plain mean (an anchor against frames nearly all black).
+	GLOBAL_DEF_RST(PropertyInfo(Variant::FLOAT, "rendering/environment/auto_exposure/anchor_stops", PROPERTY_HINT_RANGE, "0,16,0.1"), 6.0);
 
 	GLOBAL_DEF("rendering/multiview/face_passes", true);
 	// Each face pass draws only what its view's frustum holds.
