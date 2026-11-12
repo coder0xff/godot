@@ -154,6 +154,15 @@ bool sc_material_feedback() {
 	return ((sc_packed_1() >> 7) & 1U) != 0;
 }
 
+// A face pass draws one view of a render of more than two views on its own: its view is sc_view_index().
+bool sc_face_pass() {
+	return ((sc_packed_1() >> 8) & 1U) != 0;
+}
+
+uint sc_view_index() {
+	return (sc_packed_1() >> 9) & 7U;
+}
+
 float sc_luminance_multiplier() {
 	// Not used in clustered renderer but we share some code with the mobile renderer that requires this.
 	return 1.0;

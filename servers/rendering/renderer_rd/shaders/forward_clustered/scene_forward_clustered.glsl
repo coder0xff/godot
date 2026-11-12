@@ -136,7 +136,7 @@ layout(location = 10) out flat uint instance_index_interp;
 
 #ifdef USE_MULTIVIEW
 #extension GL_EXT_multiview : enable
-#define ViewIndex gl_ViewIndex
+#define ViewIndex (sc_face_pass() ? sc_view_index() : gl_ViewIndex)
 
 vec3 multiview_uv(vec2 uv) {
 	return vec3(uv, ViewIndex);
@@ -947,7 +947,7 @@ layout(location = 10) in flat uint instance_index_interp;
 
 #ifdef USE_MULTIVIEW
 #extension GL_EXT_multiview : enable
-#define ViewIndex gl_ViewIndex
+#define ViewIndex (sc_face_pass() ? sc_view_index() : gl_ViewIndex)
 vec3 multiview_uv(vec2 uv) {
 	return vec3(uv, ViewIndex);
 }

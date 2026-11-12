@@ -130,6 +130,10 @@ public:
 				uint32_t cluster_has_area_light : 1;
 				uint32_t use_lightmap_specular : 1;
 				uint32_t material_feedback : 1;
+				// A face pass: one view of a render of more than two views, drawn on its own (the view is
+				// `view_index`, not the multiview render pass's).
+				uint32_t face_pass : 1;
+				uint32_t view_index : 3;
 			};
 		};
 

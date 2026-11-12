@@ -153,6 +153,8 @@ public:
 
 		RID get_color_only_fb();
 		RID get_color_pass_fb(uint32_t p_color_pass_flags);
+		// One view of the colour pass's framebuffer, single-view (a face pass).
+		RID get_color_pass_face_fb(uint32_t p_color_pass_flags, uint32_t p_view);
 		RID get_depth_fb(DepthFrameBufferType p_type = DEPTH_FB);
 		RID get_specular_only_fb();
 		RID get_velocity_only_fb();
