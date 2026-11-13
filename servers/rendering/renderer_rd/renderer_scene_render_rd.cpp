@@ -1454,6 +1454,7 @@ void RendererSceneRenderRD::render_scene(const Ref<RenderSceneBuffers> &p_render
 	{
 		render_data.render_buffers = rb;
 		render_data.scene_data = &scene_data;
+		render_data.capture = probe_capture_pending;
 
 		render_data.instances = &p_instances;
 		render_data.lights = &p_lights;
@@ -1893,7 +1894,102 @@ void RendererSceneRenderRD::init() {
 	resolve_effects = memnew(RendererRD::Resolve(!can_use_storage));
 }
 
+bool RendererSceneRenderRD::probe_capture_supported() const {
+	// The capture pass: Forward+ (its capture variant) with layered output from the vertex shader.
+	return _has_capture_pass() && RD::get_singleton()->has_feature(RD::SUPPORTS_SHADER_OUTPUT_LAYER);
+}
+
+void RendererSceneRenderRD::_probe_capture_free() {
+	ProbeCaptureContext &c = probe_capture_context;
+	if (c.framebuffer.is_valid() && RD::get_singleton()->framebuffer_is_valid(c.framebuffer)) {
+		RD::get_singleton()->free_rid(c.framebuffer);
+	}
+	c.framebuffer = RID();
+	c.render_buffers.unref();
+	if (c.render_target.is_valid()) {
+		RendererRD::TextureStorage::get_singleton()->render_target_free(c.render_target);
+		c.render_target = RID();
+	}
+	if (c.shadow_atlas.is_valid()) {
+		RendererRD::LightStorage::get_singleton()->shadow_atlas_free(c.shadow_atlas);
+		c.shadow_atlas = RID();
+	}
+	c.face_size = Size2i();
+	c.layer_budget = 0;
+}
+
+Ref<RenderSceneBuffers> RendererSceneRenderRD::probe_capture_begin(const Size2i &p_face_size, uint32_t p_layers, const Transform3D *p_faces, const Projection *p_projections, RID p_colour, RID p_depth, RID &r_shadow_atlas) {
+	ERR_FAIL_COND_V_MSG(!probe_capture_supported(), Ref<RenderSceneBuffers>(), "Probe captures need the Forward+ renderer and layered output from the vertex shader (SUPPORTS_SHADER_OUTPUT_LAYER).");
+	ERR_FAIL_COND_V(p_layers == 0 || p_face_size.x <= 0 || p_face_size.y <= 0, Ref<RenderSceneBuffers>());
+	ERR_FAIL_COND_V(probe_capture_pending != nullptr, Ref<RenderSceneBuffers>());
+	RD *rd = RD::get_singleton();
+	ERR_FAIL_COND_V_MSG(!rd->texture_is_valid(p_colour) || !rd->texture_is_valid(p_depth), Ref<RenderSceneBuffers>(), "Probe capture: the colour and depth arrays must be RenderingDevice textures.");
+	const RD::TextureFormat colour_format = rd->texture_get_format(p_colour);
+	const RD::TextureFormat depth_format = rd->texture_get_format(p_depth);
+	ERR_FAIL_COND_V_MSG(colour_format.array_layers < p_layers || depth_format.array_layers < p_layers, Ref<RenderSceneBuffers>(), vformat("Probe capture: %d faces, but the arrays hold %d and %d layers.", p_layers, colour_format.array_layers, depth_format.array_layers));
+	ERR_FAIL_COND_V_MSG(int(colour_format.width) != p_face_size.x || int(colour_format.height) != p_face_size.y || int(depth_format.width) != p_face_size.x || int(depth_format.height) != p_face_size.y, Ref<RenderSceneBuffers>(), "Probe capture: the arrays are not a face's size.");
+
+	ProbeCaptureContext &c = probe_capture_context;
+	if (c.face_size != p_face_size || c.layer_budget < p_layers) {
+		_probe_capture_free();
+		c.face_size = p_face_size;
+		c.layer_budget = p_layers;
+		RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+		c.render_target = texture_storage->render_target_create();
+		texture_storage->render_target_set_size(c.render_target, p_face_size.x, p_face_size.y, 1);
+		c.render_buffers = render_buffers_create();
+		c.render_buffers->set_capture_layer_budget(p_layers);
+		RenderSceneBuffersConfiguration config;
+		config.set_render_target(c.render_target);
+		config.set_internal_size(p_face_size);
+		config.set_target_size(p_face_size);
+		config.set_view_count(1);
+		config.set_scaling_3d_mode(RSE::VIEWPORT_SCALING_3D_MODE_OFF);
+		config.set_msaa_3d(RSE::VIEWPORT_MSAA_DISABLED);
+		config.set_screen_space_aa(RSE::VIEWPORT_SCREEN_SPACE_AA_DISABLED);
+		config.set_use_taa(false);
+		config.set_use_debanding(false);
+		c.render_buffers->configure(&config);
+		// The positional lights' shadows, as a viewport's default atlas (P4c shares one with the player's views).
+		RendererRD::LightStorage *light_storage = RendererRD::LightStorage::get_singleton();
+		c.shadow_atlas = light_storage->shadow_atlas_create();
+		light_storage->shadow_atlas_set_size(c.shadow_atlas, GLOBAL_GET("rendering/lights_and_shadows/positional_shadow/atlas_size"));
+		const int subdivisions[4] = { 4, 4, 16, 64 };
+		for (int q = 0; q < 4; q++) {
+			light_storage->shadow_atlas_set_quadrant_subdivision(c.shadow_atlas, q, subdivisions[q]);
+		}
+	}
+	if (!c.framebuffer.is_valid() || !rd->framebuffer_is_valid(c.framebuffer) || c.framebuffer_colour != p_colour || c.framebuffer_depth != p_depth || c.framebuffer_layers != p_layers) {
+		if (c.framebuffer.is_valid() && rd->framebuffer_is_valid(c.framebuffer)) {
+			rd->free_rid(c.framebuffer);
+		}
+		Vector<RID> textures;
+		textures.push_back(p_colour);
+		textures.push_back(p_depth);
+		c.framebuffer = rd->framebuffer_create_layered(textures, p_layers);
+		ERR_FAIL_COND_V(c.framebuffer.is_null(), Ref<RenderSceneBuffers>());
+		c.framebuffer_colour = p_colour;
+		c.framebuffer_depth = p_depth;
+		c.framebuffer_layers = p_layers;
+	}
+	probe_capture_layers.count = p_layers;
+	probe_capture_layers.faces = p_faces;
+	probe_capture_layers.projections = p_projections;
+	probe_capture_layers.framebuffer = c.framebuffer;
+	probe_capture_layers.colour = p_colour;
+	probe_capture_layers.depth = p_depth;
+	probe_capture_pending = &probe_capture_layers;
+	r_shadow_atlas = c.shadow_atlas;
+	return c.render_buffers;
+}
+
+void RendererSceneRenderRD::probe_capture_end() {
+	probe_capture_pending = nullptr;
+	probe_capture_layers = RenderDataRD::CaptureLayers();
+}
+
 RendererSceneRenderRD::~RendererSceneRenderRD() {
+	_probe_capture_free();
 	memdelete(forward_id_storage);
 
 	memdelete(bokeh_dof);

@@ -172,7 +172,8 @@ void RenderForwardClustered::RenderBufferDataForwardClustered::configure(RenderS
 	RID sampler = RendererRD::MaterialStorage::get_singleton()->sampler_rd_get_default(RSE::CANVAS_ITEM_TEXTURE_FILTER_NEAREST, RSE::CANVAS_ITEM_TEXTURE_REPEAT_DISABLED);
 	// Note: Color and depth buffer is only used for our debug mode, we don't support stereo rendering for this.
 	// More than two views (a capture's faces) may have their clusters by face: room for a grid a view.
-	const uint32_t cluster_layers = p_render_buffers->get_view_count() > 2 ? p_render_buffers->get_view_count() : 1;
+	// A probe capture context's buffers: room for its layer budget.
+	const uint32_t cluster_layers = p_render_buffers->get_capture_layer_budget() > 0 ? p_render_buffers->get_capture_layer_budget() : (p_render_buffers->get_view_count() > 2 ? p_render_buffers->get_view_count() : 1);
 	cluster_builder->setup(p_render_buffers->get_internal_size(), p_render_buffers->get_max_cluster_elements(), p_render_buffers->get_depth_texture(0), sampler, p_render_buffers->get_internal_texture(0), cluster_layers);
 }
 
@@ -1792,17 +1793,21 @@ void RenderForwardClustered::_pre_opaque_render(RenderDataRD *p_render_data, boo
 			const RenderSceneDataRD *scene_data = p_render_data->scene_data;
 			Projection correction;
 			correction.set_depth_correction(scene_data->flip_y);
-			Projection projections[RendererSceneRender::MAX_RENDER_VIEWS];
+			LocalVector<Projection> projections;
+			projections.resize(cluster_layers);
 			float z_near = 0.0;
 			float z_far = 0.0;
+			const Transform3D reference_inverse = scene_data->cam_transform.affine_inverse();
 			for (uint32_t v = 0; v < cluster_layers; v++) {
-				Projection face = scene_data->view_projection[v] * Projection(scene_data->view_offset[v]);
+				// The face's offset from the camera, and its projection without it.
+				const Transform3D offset = p_render_data->capture ? reference_inverse * p_render_data->capture->faces[v] : scene_data->view_offset[v];
+				Projection face = p_render_data->capture ? p_render_data->capture->projections[v] : scene_data->view_projection[v] * Projection(offset);
 				z_near = face.get_z_near();
 				z_far = face.get_z_far();
 				face.adjust_perspective_znear(0.0001); // As the camera's: shapes crossing the near plane still cover it.
-				projections[v] = correction * face * Projection(scene_data->view_offset[v].affine_inverse());
+				projections[v] = correction * face * Projection(offset.affine_inverse());
 			}
-			current_cluster_builder->set_layers(cluster_layers, projections, z_near, z_far);
+			current_cluster_builder->set_layers(cluster_layers, projections.ptr(), z_near, z_far);
 		}
 	}
 
@@ -1855,10 +1860,39 @@ void RenderForwardClustered::_process_sss(Ref<RenderSceneBuffersRD> p_render_buf
 	}
 }
 
+RID RenderForwardClustered::_capture_sky_framebuffer(const RenderDataRD *p_render_data, uint32_t p_first, uint32_t p_count) {
+	// The caller's colour and depth arrays (the capture's layered framebuffer's), as views of p_count layers from
+	// p_first; kept until the arrays change.
+	RD *rd = RD::get_singleton();
+	const RID textures[2] = { p_render_data->capture->colour, p_render_data->capture->depth };
+	if (capture_sky_slices.colour_source != textures[0] || capture_sky_slices.depth_source != textures[1]) {
+		for (KeyValue<uint64_t, RID> &kv : capture_sky_slices.slices) {
+			if (rd->texture_is_valid(kv.value)) {
+				rd->free_rid(kv.value);
+			}
+		}
+		capture_sky_slices.slices.clear();
+		capture_sky_slices.colour_source = textures[0];
+		capture_sky_slices.depth_source = textures[1];
+	}
+	RID slice[2];
+	for (int t = 0; t < 2; t++) {
+		const uint64_t key = (uint64_t(t) << 40) | (uint64_t(p_first) << 20) | p_count;
+		RID *found = capture_sky_slices.slices.getptr(key);
+		if (found == nullptr || !rd->texture_is_valid(*found)) {
+			RID view = rd->texture_create_shared_from_slice(RD::TextureView(), textures[t], p_first, 0, 1, RD::TEXTURE_SLICE_2D_ARRAY, p_count);
+			capture_sky_slices.slices[key] = view;
+			found = capture_sky_slices.slices.getptr(key);
+		}
+		slice[t] = *found;
+	}
+	return FramebufferCacheRD::get_singleton()->get_cache_multiview(p_count, slice[0], slice[1]);
+}
+
 bool RenderForwardClustered::_fill_capture_layers(const RenderDataRD *p_render_data) {
 	const RenderSceneDataRD *scene_data = p_render_data->scene_data;
-	const uint32_t layers = scene_data->view_count;
-	ERR_FAIL_COND_V(layers == 0 || layers > RendererSceneRender::MAX_RENDER_VIEWS, false);
+	const uint32_t layers = _capture_layer_count(p_render_data);
+	ERR_FAIL_COND_V(layers == 0 || (!p_render_data->capture && layers > RendererSceneRender::MAX_RENDER_VIEWS), false);
 
 	if (!scene_shader.is_capture_shader_group_enabled()) {
 		scene_shader.enable_capture_shader_group();
@@ -1868,30 +1902,48 @@ bool RenderForwardClustered::_fill_capture_layers(const RenderDataRD *p_render_d
 	// projection and the transform from its view space to the reference space, as five mat4s.
 	constexpr uint32_t LAYER_FLOATS = 16 * 5;
 	constexpr uint32_t HEADER_FLOATS = 4;
-	if (capture_layers_buffer.is_null()) {
-		capture_layers_buffer = RD::get_singleton()->storage_buffer_create((HEADER_FLOATS + RendererSceneRender::MAX_RENDER_VIEWS * LAYER_FLOATS) * sizeof(float));
+	const uint32_t room = MAX(layers, uint32_t(RendererSceneRender::MAX_RENDER_VIEWS));
+	if (capture_layers_buffer.is_null() || capture_layers_buffer_layers < room) {
+		if (capture_layers_buffer.is_valid()) {
+			RD::get_singleton()->free_rid(capture_layers_buffer); // The render pass sets that bind it are made each render.
+		}
+		capture_layers_buffer = RD::get_singleton()->storage_buffer_create((HEADER_FLOATS + room * LAYER_FLOATS) * sizeof(float));
+		capture_layers_buffer_layers = room;
 	}
 
-	float data[HEADER_FLOATS + RendererSceneRender::MAX_RENDER_VIEWS * LAYER_FLOATS] = {};
+	LocalVector<float> data;
+	data.resize(HEADER_FLOATS + layers * LAYER_FLOATS);
+	memset(data.ptr(), 0, data.size() * sizeof(float));
 	const uint32_t header[HEADER_FLOATS] = { layers, 0, 0, 0 };
-	memcpy(data, header, sizeof(header));
+	memcpy(data.ptr(), header, sizeof(header));
 
 	Projection correction;
 	correction.set_depth_correction(scene_data->flip_y);
+	const Transform3D reference_inverse = scene_data->cam_transform.affine_inverse();
 	for (uint32_t v = 0; v < layers; v++) {
 		// The view's camera: the reference camera turned (and moved) by the view's offset; its projection is the
-		// view's own, without the offset that the multiview projection folds in.
-		const Transform3D &offset = scene_data->view_offset[v];
-		const Transform3D face = scene_data->cam_transform * offset;
-		const Projection projection = correction * scene_data->view_projection[v] * Projection(offset);
-		float *layer = data + HEADER_FLOATS + v * LAYER_FLOATS;
+		// view's own, without the offset that the multiview projection folds in. A probe capture's face: its own camera,
+		// and its offset from the reference camera (the capture's region centre).
+		Transform3D offset;
+		Transform3D face;
+		Projection projection;
+		if (p_render_data->capture) {
+			face = p_render_data->capture->faces[v];
+			offset = reference_inverse * face;
+			projection = correction * p_render_data->capture->projections[v];
+		} else {
+			offset = scene_data->view_offset[v];
+			face = scene_data->cam_transform * offset;
+			projection = correction * scene_data->view_projection[v] * Projection(offset);
+		}
+		float *layer = data.ptr() + HEADER_FLOATS + v * LAYER_FLOATS;
 		RendererRD::MaterialStorage::store_transform(face.affine_inverse(), layer);
 		RendererRD::MaterialStorage::store_transform(face, layer + 16);
 		RendererRD::MaterialStorage::store_camera(projection, layer + 32);
 		RendererRD::MaterialStorage::store_camera(projection.inverse(), layer + 48);
 		RendererRD::MaterialStorage::store_transform(offset, layer + 64);
 	}
-	RD::get_singleton()->buffer_update(capture_layers_buffer, 0, (HEADER_FLOATS + layers * LAYER_FLOATS) * sizeof(float), data);
+	RD::get_singleton()->buffer_update(capture_layers_buffer, 0, data.size() * sizeof(float), data.ptr());
 	return true;
 }
 
@@ -1910,7 +1962,7 @@ bool RenderForwardClustered::_capture_cull(const RenderDataRD *p_render_data, Re
 	RendererRD::MeshStorage *mesh_storage = RendererRD::MeshStorage::get_singleton();
 	const RenderSceneDataRD *scene_data = p_render_data->scene_data;
 	const RenderList &list = render_list[p_list];
-	const uint32_t layers = scene_data->view_count;
+	const uint32_t layers = _capture_layer_count(p_render_data);
 	CaptureCull &cc = capture_cull;
 
 	if (cc.version.is_null()) {
@@ -2001,9 +2053,9 @@ bool RenderForwardClustered::_capture_cull(const RenderDataRD *p_render_data, Re
 	// Each layer's frustum in the world: the face's camera and its own projection.
 	cc.plane_data.resize(layers * 6 * 4);
 	for (uint32_t v = 0; v < layers; v++) {
-		const Transform3D &offset = scene_data->view_offset[v];
-		const Projection projection = scene_data->view_projection[v] * Projection(offset);
-		const Vector<Plane> planes = projection.get_projection_planes(scene_data->cam_transform * offset);
+		const Vector<Plane> planes = p_render_data->capture
+				? p_render_data->capture->projections[v].get_projection_planes(p_render_data->capture->faces[v])
+				: (scene_data->view_projection[v] * Projection(scene_data->view_offset[v])).get_projection_planes(scene_data->cam_transform * scene_data->view_offset[v]);
 		ERR_FAIL_COND_V(planes.size() != 6, false);
 		for (int p = 0; p < 6; p++) {
 			float *f = cc.plane_data.ptr() + (v * 6 + p) * 4;
@@ -2145,7 +2197,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// hold small lights and decals right). The views share their near and far planes.
 	cluster_layers = 0;
 	cluster_layers_z_far = 0.0;
-	if (rb_data.is_valid() && !is_reflection_probe && p_render_data->scene_data->view_count > 2) {
+	if (rb_data.is_valid() && !is_reflection_probe && p_render_data->capture) {
+		cluster_layers = p_render_data->capture->count;
+		cluster_layers_z_far = p_render_data->capture->projections[0].get_z_far();
+	} else if (rb_data.is_valid() && !is_reflection_probe && p_render_data->scene_data->view_count > 2) {
 		cluster_layers = p_render_data->scene_data->view_count;
 		cluster_layers_z_far = (p_render_data->scene_data->view_projection[0] * Projection(p_render_data->scene_data->view_offset[0])).get_z_far();
 	}
@@ -2510,7 +2565,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// and the pre-pass draws every vertex a second time. It is skipped when nothing reads its depth or normals before
 	// the opaque pass (the screen-space effects already force it), which then tests and writes depth itself.
 	bool depth_pre_pass_skipped = false;
-	if (depth_pre_pass && !force_depth_pre_pass && p_render_data->scene_data->view_count > 2 && depth_pass_mode == PASS_MODE_DEPTH) {
+	if (depth_pre_pass && !force_depth_pre_pass && (p_render_data->scene_data->view_count > 2 || p_render_data->capture) && depth_pass_mode == PASS_MODE_DEPTH) {
 		const bool motion_vectors = color_pass_flags & COLOR_PASS_FLAG_MOTION_VECTORS;
 		if (!using_sdfgi && !using_voxelgi && !motion_vectors && !ce_pre_opaque_resolved_depth && !ce_post_opaque_resolved_depth) {
 			depth_pre_pass = false;
@@ -2594,7 +2649,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	}
 	// The capture pass (rendering/multiview/capture_pass), where face passes could be drawn: one pass into every view's
 	// layer through each material's capture variant, with its own single-view render pass set.
-	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass") && _fill_capture_layers(p_render_data) && _capture_cull(p_render_data, RENDER_LIST_OPAQUE, color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW), false);
+	const bool capture_pass = depth_pre_pass_skipped && rb_data.is_valid() && !use_msaa && !(color_pass_flags & (COLOR_PASS_FLAG_SEPARATE_SPECULAR | COLOR_PASS_FLAG_MOTION_VECTORS)) && !rb->has_texture(RB_SCOPE_VRS, RB_TEXTURE) && (p_render_data->capture || GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass")) && _fill_capture_layers(p_render_data) && _capture_cull(p_render_data, RENDER_LIST_OPAQUE, color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW), false);
 	if (capture_pass && GLOBAL_GET_CACHED(bool, "rendering/multiview/capture_pass_stats")) {
 		print_line(vformat("Capture pass clusters: %s.", cluster_layers > 1 ? vformat("by view, %d grids", cluster_layers) : String("the camera's")));
 	}
@@ -2661,10 +2716,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				capture_params.color_pass_flags = opaque_color_pass_flags & ~uint32_t(COLOR_PASS_FLAG_MULTIVIEW);
 				capture_params.view_count = 1;
 				capture_params.render_pass_uniform_set = capture_rp_uniform_set;
-				capture_params.capture_layer_count = p_render_data->scene_data->view_count;
+				capture_params.capture_layer_count = _capture_layer_count(p_render_data);
 				capture_params.capture_draw_index = capture_cull.draw_of_element.ptr();
 				capture_params.capture_commands = capture_cull.commands;
-				_render_list_with_draw_list(&capture_params, rb_data->get_color_pass_layered_fb(), RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, capture_clear, 0.0f, 0u, p_render_data->render_region);
+				_render_list_with_draw_list(&capture_params, p_render_data->capture ? p_render_data->capture->framebuffer : rb_data->get_color_pass_layered_fb(), RD::DrawFlags(load_color ? RD::DRAW_DEFAULT_ALL : RD::DRAW_CLEAR_COLOR_ALL) | RD::DRAW_CLEAR_DEPTH, capture_clear, 0.0f, 0u, p_render_data->render_region);
 			} else if (face_passes) {
 				Vector<Color> face_clear;
 				if (!load_color) {
@@ -2810,7 +2865,26 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		_debug_sdfgi_probes(rb, color_only_framebuffer, p_render_data->scene_data->view_count, cms);
 	}
 
-	if (draw_sky || draw_sky_fog_only) {
+	if ((draw_sky || draw_sky_fog_only) && p_render_data->capture) {
+		// A probe capture's sky: into the caller's layers, as the multiview sky in runs of up to MAX_RENDER_VIEWS faces
+		// (at least two: a run's views), each run's views its faces.
+		RENDER_TIMESTAMP("Render Sky");
+		RD::get_singleton()->draw_command_begin_label("Draw Sky (probe capture)");
+		const uint32_t layers = p_render_data->capture->count;
+		for (uint32_t first = 0; first < layers; first += RendererSceneRender::MAX_RENDER_VIEWS) {
+			uint32_t count = MIN(uint32_t(RendererSceneRender::MAX_RENDER_VIEWS), layers - first);
+			if (count < 2) {
+				first = layers - 2; // Draws one face twice: the same pixels.
+				count = 2;
+			}
+			sky.setup_capture_views(p_render_data, first, count);
+			RID fb = _capture_sky_framebuffer(p_render_data, first, count);
+			RD::DrawListID draw_list = RD::get_singleton()->draw_list_begin(fb, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 1.0f, 0u, p_render_data->render_region);
+			sky.draw_sky(draw_list, rb, p_render_data->environment, fb, time, sky_luminance_multiplier, sky_brightness_multiplier);
+			RD::get_singleton()->draw_list_end();
+		}
+		RD::get_singleton()->draw_command_end_label();
+	} else if (draw_sky || draw_sky_fog_only) {
 		RENDER_TIMESTAMP("Render Sky");
 
 		RD::get_singleton()->draw_command_begin_label("Draw Sky");
@@ -2928,7 +3002,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// More than two views (a cube capture's six faces, read by a compositor effect before post-processing): a render
 	// of many small views pays the transparent pass's fixed cost (its scene data, its uniform set, a render pass) once
 	// a render, so it is skipped when there is nothing transparent to draw.
-	const bool capture_render = p_render_data->scene_data->view_count > 2;
+	const bool capture_render = p_render_data->scene_data->view_count > 2 || p_render_data->capture;
 	const bool skip_transparent = capture_render && render_list[RENDER_LIST_ALPHA].elements.is_empty();
 
 	RENDER_TIMESTAMP("Render 3D Transparent Pass");
@@ -2958,10 +3032,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				capture_params.color_pass_flags = capture_transparent_flags;
 				capture_params.view_count = 1;
 				capture_params.render_pass_uniform_set = capture_alpha_set;
-				capture_params.capture_layer_count = p_render_data->scene_data->view_count;
+				capture_params.capture_layer_count = _capture_layer_count(p_render_data);
 				capture_params.capture_draw_index = capture_cull.draw_of_element.ptr();
 				capture_params.capture_commands = capture_cull.commands;
-				_render_list_with_draw_list(&capture_params, rb_data->get_color_pass_layered_fb(), RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+				_render_list_with_draw_list(&capture_params, p_render_data->capture ? p_render_data->capture->framebuffer : rb_data->get_color_pass_layered_fb(), RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
 			} else {
 				_render_list_with_draw_list(&render_list_params, alpha_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
 			}
@@ -5905,6 +5979,12 @@ RenderForwardClustered::RenderForwardClustered() {
 }
 
 RenderForwardClustered::~RenderForwardClustered() {
+	for (KeyValue<uint64_t, RID> &kv : capture_sky_slices.slices) {
+		if (RD::get_singleton()->texture_is_valid(kv.value)) {
+			RD::get_singleton()->free_rid(kv.value);
+		}
+	}
+	capture_sky_slices.slices.clear();
 	if (capture_layers_buffer.is_valid()) {
 		RD::get_singleton()->free_rid(capture_layers_buffer);
 	}

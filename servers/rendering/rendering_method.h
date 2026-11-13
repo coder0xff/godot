@@ -359,6 +359,10 @@ public:
 
 	virtual void update() = 0;
 	virtual void render_probes() = 0;
+
+	/* Probe capture (RenderingServer::probe_capture) */
+	virtual bool probe_capture_supported() const = 0;
+	virtual void probe_capture(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth) = 0;
 	virtual void update_visibility_notifiers() = 0;
 
 	virtual void decals_set_filter(RSE::DecalFilter p_filter) = 0;

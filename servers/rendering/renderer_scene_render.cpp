@@ -39,6 +39,7 @@ void RendererSceneRender::CameraData::set_camera(const Transform3D p_transform, 
 	view_count = 1;
 	is_orthogonal = p_is_orthogonal;
 	vaspect = p_vaspect;
+	capture_box = false;
 
 	main_transform = p_transform;
 	main_projection = p_projection;
@@ -56,6 +57,7 @@ void RendererSceneRender::CameraData::set_multiview_camera(const Transform3D &p_
 
 	visible_layers = p_visible_layers;
 	view_count = p_projections.size();
+	capture_box = false;
 	is_orthogonal = p_is_orthogonal;
 	vaspect = p_vaspect;
 
@@ -76,6 +78,18 @@ void RendererSceneRender::CameraData::set_multiview_camera(const Transform3D &p_
 		view_offset[v] = p_offsets[v];
 		view_projection[v] = p_projections[v] * Projection(view_offset[v].inverse());
 	}
+}
+
+void RendererSceneRender::CameraData::set_capture_box(const Transform3D &p_transform, real_t p_half_extent, uint32_t p_visible_layers) {
+	visible_layers = p_visible_layers;
+	view_count = 1;
+	is_orthogonal = false; // The faces are perspective; as a camera of more than two views (its box is orthogonal).
+	vaspect = false;
+	capture_box = true;
+	main_transform = p_transform;
+	main_projection.set_orthogonal(-p_half_extent, p_half_extent, -p_half_extent, p_half_extent, -p_half_extent, p_half_extent);
+	view_offset[0] = Transform3D();
+	view_projection[0] = main_projection;
 }
 
 /* Compositor effect API */

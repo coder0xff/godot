@@ -1169,6 +1169,22 @@ public:
 	void render_particle_colliders();
 	virtual void render_probes();
 
+	struct ProbeCaptureRequest {
+		RID scenario;
+		PackedVector3Array origins;
+		float near = 0.0;
+		float far = 0.0;
+		uint32_t cull_mask = 0;
+		float exposure = 1.0;
+		RID colour;
+		RID depth;
+	};
+	LocalVector<ProbeCaptureRequest> probe_capture_queue; // Drawn at the next frame's draw (render_probes).
+	void _probe_capture_draw(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth);
+
+	virtual bool probe_capture_supported() const override;
+	virtual void probe_capture(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth) override;
+
 	TypedArray<Image> bake_render_uv2(RID p_base, const TypedArray<RID> &p_material_overrides, const Size2i &p_image_size);
 	PackedByteArray bake_render_area_light_atlas(const TypedArray<RID> &p_area_light_textures, const TypedArray<Rect2> &p_area_light_atlas_texture_rects, const Size2i &p_size, int p_mipmaps);
 

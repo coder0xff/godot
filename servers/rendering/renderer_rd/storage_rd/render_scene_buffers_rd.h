@@ -70,6 +70,7 @@ private:
 	bool can_be_storage = true;
 	bool force_hdr = false;
 	uint32_t max_cluster_elements = 512;
+	uint32_t capture_layer_budget = 0; // A probe capture's buffers: the most layers (faces) a capture draws.
 	RD::DataFormat preferred_data_format = RD::DATA_FORMAT_MAX;
 	RendererRD::VRS *vrs = nullptr;
 	uint64_t auto_exposure_version = 1;
@@ -193,6 +194,10 @@ public:
 	bool get_can_be_storage() const { return can_be_storage; }
 	void set_max_cluster_elements(const uint32_t p_max_elements) { max_cluster_elements = p_max_elements; }
 	uint32_t get_max_cluster_elements() { return max_cluster_elements; }
+	// A probe capture context's buffers (RenderingServer::probe_capture): the most faces a capture draws, which the
+	// clusters by layer are set up for (before configure). 0 for a viewport's.
+	void set_capture_layer_budget(uint32_t p_layers) { capture_layer_budget = p_layers; }
+	uint32_t get_capture_layer_budget() const { return capture_layer_budget; }
 	void set_preferred_data_format(const RD::DataFormat p_preferred_data_format) { preferred_data_format = p_preferred_data_format; }
 	RD::DataFormat get_preferred_data_format() const { return preferred_data_format; }
 	RD::DataFormat get_base_data_format() const { return force_hdr ? RD::DATA_FORMAT_R16G16B16A16_SFLOAT : preferred_data_format; }

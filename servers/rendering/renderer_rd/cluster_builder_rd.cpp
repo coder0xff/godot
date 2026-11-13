@@ -476,12 +476,12 @@ void ClusterBuilderRD::set_layers(uint32_t p_count, const Projection *p_projecti
 	}
 	layer_z_near = p_z_near;
 	layer_z_far = p_z_far;
-	float data[16 * RendererSceneRender::MAX_RENDER_VIEWS];
-	ERR_FAIL_COND(p_count > RendererSceneRender::MAX_RENDER_VIEWS);
+	LocalVector<float> data;
+	data.resize(16 * p_count);
 	for (uint32_t i = 0; i < p_count; i++) {
-		RendererRD::MaterialStorage::store_camera(p_projections[i], data + i * 16);
+		RendererRD::MaterialStorage::store_camera(p_projections[i], data.ptr() + i * 16);
 	}
-	RD::get_singleton()->buffer_update(layer_buffer, 0, sizeof(float) * 16 * p_count, data);
+	RD::get_singleton()->buffer_update(layer_buffer, 0, sizeof(float) * 16 * p_count, data.ptr());
 }
 
 void ClusterBuilderRD::bake_cluster() {

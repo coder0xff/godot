@@ -243,6 +243,30 @@ public:
 	virtual RD::DataFormat _render_buffers_get_preferred_color_format();
 	virtual bool _render_buffers_can_be_storage();
 	virtual Ref<RenderSceneBuffers> render_buffers_create() override;
+
+	/* Probe capture (RenderingServer::probe_capture) */
+
+	// The context a capture renders with: its own render buffers (one view, a face's size, the clusters set up for
+	// the layer budget; a render target to configure them, never shown), and its own shadow atlas.
+	struct ProbeCaptureContext {
+		Size2i face_size;
+		uint32_t layer_budget = 0;
+		RID render_target;
+		Ref<RenderSceneBuffersRD> render_buffers;
+		RID shadow_atlas;
+		RID framebuffer; // The caller's colour and depth arrays, layered; remade when they change.
+		RID framebuffer_colour;
+		RID framebuffer_depth;
+		uint32_t framebuffer_layers = 0;
+	} probe_capture_context;
+	RenderDataRD::CaptureLayers probe_capture_layers;
+	const RenderDataRD::CaptureLayers *probe_capture_pending = nullptr; // Between begin and end.
+	void _probe_capture_free();
+	virtual bool _has_capture_pass() const { return false; } // The renderer draws RenderDataRD::capture (Forward+).
+
+	virtual bool probe_capture_supported() const override;
+	virtual Ref<RenderSceneBuffers> probe_capture_begin(const Size2i &p_face_size, uint32_t p_layers, const Transform3D *p_faces, const Projection *p_projections, RID p_colour, RID p_depth, RID &r_shadow_atlas) override;
+	virtual void probe_capture_end() override;
 	virtual void gi_set_use_half_resolution(bool p_enable) override;
 
 	RID render_buffers_get_default_voxel_gi_buffer();

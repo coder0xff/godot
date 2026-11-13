@@ -327,6 +327,9 @@ public:
 	~SkyRD();
 
 	void setup_sky(const RenderDataRD *p_render_data, const Size2i p_screen_size);
+	// After setup_sky, for a probe capture (RenderDataRD::capture): the sky drawn as views p_first to p_first + p_count - 1
+	// of the capture's faces (2 to MAX_RENDER_VIEWS of them), each its face's direction from the capture's camera.
+	void setup_capture_views(const RenderDataRD *p_render_data, uint32_t p_first, uint32_t p_count);
 	void update_radiance_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_env, const Vector3 &p_global_pos, double p_time, float p_luminance_multiplier = 1.0, float p_brightness_multiplier = 1.0);
 	void update_res_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, RID p_env, double p_time, float p_luminance_multiplier = 1.0, float p_brightness_multiplier = 1.0);
 	void draw_sky(RD::DrawListID p_draw_list, Ref<RenderSceneBuffersRD> p_render_buffers, RID p_env, RID p_fb, double p_time, float p_luminance_multiplier = 1.0, float p_brightness_multiplier = 1.0);

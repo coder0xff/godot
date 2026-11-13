@@ -734,6 +734,15 @@ public:
 	virtual void scenario_set_camera_attributes(RID p_scenario, RID p_camera_attributes) = 0;
 	virtual void scenario_set_compositor(RID p_scenario, RID p_compositor) = 0;
 
+	/* PROBE CAPTURE API */
+
+	// Whether probe_capture draws on this renderer (Forward+ with layered output from the vertex shader).
+	virtual bool probe_capture_supported() const = 0;
+	// Renders the cube faces (+X, -X, +Y, -Y, +Z, -Z; 90°, the cube map's ups) of a probe at each origin into the layers
+	// of p_colour (HDR before tonemapping) and p_depth, RenderingDevice 2D arrays of 6 layers a probe, a face their size;
+	// with the scene's own materials, lights, shadows, sky and environment, and no viewport.
+	virtual void probe_capture(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth) = 0;
+
 	/* INSTANCING API */
 
 	virtual RID instance_create2(RID p_base, RID p_scenario);

@@ -35,6 +35,7 @@
 #include "core/math/geometry_3d.h"
 #include "core/object/callable_mp.h"
 #include "core/object/worker_thread_pool.h"
+#include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_light_culler.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/rendering/rendering_server_default.h"
@@ -3358,7 +3359,8 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 
 	RENDER_TIMESTAMP("Update Visibility Dependencies");
 
-	if (scenario->instance_visibility.get_bin_count() > 0) {
+	// A probe capture (no viewport) takes none of the scenario's 64 viewport bits: its visibility ranges are P4b's.
+	if (scenario->instance_visibility.get_bin_count() > 0 && p_viewport.is_valid()) {
 		if (!scenario->viewport_visibility_masks.has(p_viewport)) {
 			scenario_add_viewport_visibility_mask(scenario->self, p_viewport);
 		}
@@ -3427,7 +3429,7 @@ void RendererSceneCull::_render_scene(const RendererSceneRender::CameraData *p_c
 
 		// More than two views: the main projection is the box around the camera (CameraData::set_multiview_camera),
 		// orthographic whatever the views are, and the cascades are fitted to it as such.
-		const bool camera_box = p_camera_data->view_count > 2;
+		const bool camera_box = p_camera_data->view_count > 2 || p_camera_data->capture_box;
 		for (int i = 0; i < lights_with_shadow.size(); i++) {
 			_light_instance_setup_directional_shadow(i, lights_with_shadow[i], p_camera_data->main_transform, p_camera_data->main_projection, p_camera_data->is_orthogonal || camera_box, p_camera_data->vaspect, camera_box);
 		}
@@ -3895,7 +3897,83 @@ bool RendererSceneCull::_render_reflection_probe_step(Instance *p_instance, int 
 	return false;
 }
 
+bool RendererSceneCull::probe_capture_supported() const {
+	return scene_render->probe_capture_supported();
+}
+
+void RendererSceneCull::probe_capture(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth) {
+	// Drawn in the frame's draw, with the reflection probes (render_probes): the scene's state is the frame's then.
+	ProbeCaptureRequest request;
+	request.scenario = p_scenario;
+	request.origins = p_origins;
+	request.near = p_near;
+	request.far = p_far;
+	request.cull_mask = p_cull_mask;
+	request.exposure = p_exposure;
+	request.colour = p_colour;
+	request.depth = p_depth;
+	probe_capture_queue.push_back(request);
+}
+
+void RendererSceneCull::_probe_capture_draw(RID p_scenario, const PackedVector3Array &p_origins, float p_near, float p_far, uint32_t p_cull_mask, float p_exposure, RID p_colour, RID p_depth) {
+	Scenario *scenario = scenario_owner.get_or_null(p_scenario);
+	ERR_FAIL_NULL(scenario);
+	ERR_FAIL_COND(p_origins.is_empty());
+	ERR_FAIL_COND(p_near <= 0.0 || p_far <= p_near);
+	ERR_FAIL_COND_MSG(!scene_render->probe_capture_supported(), "Probe captures need the Forward+ renderer and layered output from the vertex shader (RenderingServer.probe_capture_supported).");
+
+	// Each probe's six faces, +X, -X, +Y, -Y, +Z, -Z, each a 90° camera turned about the probe with the cube map's ups.
+	static const Vector3 dirs[6] = { Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, -1, 0), Vector3(0, 0, 1), Vector3(0, 0, -1) };
+	static const Vector3 ups[6] = { Vector3(0, -1, 0), Vector3(0, -1, 0), Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(0, -1, 0), Vector3(0, -1, 0) };
+	const uint32_t layers = p_origins.size() * 6;
+	LocalVector<Transform3D> faces;
+	LocalVector<Projection> projections;
+	faces.resize(layers);
+	projections.resize(layers);
+	Projection face_projection;
+	face_projection.set_perspective(90.0, 1.0, p_near, p_far, false);
+	AABB region(p_origins[0], Vector3());
+	for (int p = 0; p < p_origins.size(); p++) {
+		region.expand_to(p_origins[p]);
+		for (int f = 0; f < 6; f++) {
+			Basis basis;
+			basis.set_columns(dirs[f].cross(ups[f]), ups[f], -dirs[f]);
+			faces[p * 6 + f] = Transform3D(basis, p_origins[p]);
+			projections[p * 6 + f] = face_projection;
+		}
+	}
+
+	RID shadow_atlas;
+	// The face size is the arrays' (probe_capture_begin checks them).
+	const RD::TextureFormat format = RD::get_singleton() ? RD::get_singleton()->texture_get_format(p_colour) : RD::TextureFormat();
+	Ref<RenderSceneBuffers> render_buffers = scene_render->probe_capture_begin(Size2i(format.width, format.height), layers, faces.ptr(), projections.ptr(), p_colour, p_depth, shadow_atlas);
+	if (render_buffers.is_null()) {
+		return;
+	}
+
+	// The scene is culled once, against the box around every probe out to the far plane, and drawn as one camera at
+	// the region's centre (the reference space every buffer is filled in); the faces are its layers.
+	RendererSceneRender::CameraData camera_data;
+	const Vector3 centre = region.get_center();
+	camera_data.set_capture_box(Transform3D(Basis(), centre), region.size.length() * 0.5 + p_far, p_cull_mask);
+	RID environment = scenario->environment.is_valid() ? scenario->environment : scenario->fallback_environment;
+	// The exposure: the scenario's camera attributes (p_exposure is the engine's own scale, applied by the caller).
+	_render_scene(&camera_data, render_buffers, environment, scenario->camera_attributes, RID(), p_cull_mask, p_scenario, RID(), shadow_atlas, RID(), 0, 0.0, 1.0);
+	scene_render->probe_capture_end();
+}
+
 void RendererSceneCull::render_probes() {
+	/* PROBE CAPTURES (RenderingServer::probe_capture), in the order asked. */
+
+	if (!probe_capture_queue.is_empty()) {
+		RENDER_TIMESTAMP("Render probe captures");
+		LocalVector<ProbeCaptureRequest> requests = std::move(probe_capture_queue);
+		probe_capture_queue.clear();
+		for (const ProbeCaptureRequest &r : requests) {
+			_probe_capture_draw(r.scenario, r.origins, r.near, r.far, r.cull_mask, r.exposure, r.colour, r.depth);
+		}
+	}
+
 	/* REFLECTION PROBES */
 
 	SelfList<InstanceReflectionProbeData> *ref_probe = reflection_probe_render_list.first();

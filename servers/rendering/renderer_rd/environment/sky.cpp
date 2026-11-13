@@ -1462,6 +1462,28 @@ void SkyRD::update_res_buffers(Ref<RenderSceneBuffersRD> p_render_buffers, RID p
 	RD::get_singleton()->draw_command_end_label(); // Setup Sky resolution buffers
 }
 
+void SkyRD::setup_capture_views(const RenderDataRD *p_render_data, uint32_t p_first, uint32_t p_count) {
+	ERR_FAIL_NULL(p_render_data->capture);
+	ERR_FAIL_COND(p_count < 2 || p_count > RendererSceneRender::MAX_RENDER_VIEWS || p_first + p_count > p_render_data->capture->count);
+	sky_scene_state.view_count = p_count;
+	Projection correction;
+	correction.set_depth_correction(p_render_data->scene_data->flip_y, true);
+	const Basis reference_inverse = p_render_data->scene_data->cam_transform.basis.inverse();
+	const Projection ident;
+	for (uint32_t i = 0; i < p_count; i++) {
+		// The face's turn from the capture's camera, without its position: the sky is at infinity, seen alike from
+		// every probe.
+		const Transform3D turn(reference_inverse * p_render_data->capture->faces[p_first + i].basis, Vector3());
+		const Projection view_projection = p_render_data->capture->projections[p_first + i] * Projection(turn.affine_inverse());
+		RendererRD::MaterialStorage::store_camera((correction * view_projection).inverse(), sky_scene_state.ubo.view_inv_projections[i]);
+		RendererRD::MaterialStorage::store_camera(ident, sky_scene_state.ubo.combined_reprojection[i]);
+		for (int k = 0; k < 4; k++) {
+			sky_scene_state.ubo.view_eye_offsets[i][k] = 0.0;
+		}
+	}
+	RD::get_singleton()->buffer_update(sky_scene_state.uniform_buffer, 0, sizeof(SkySceneState::UBO), &sky_scene_state.ubo);
+}
+
 void SkyRD::draw_sky(RD::DrawListID p_draw_list, Ref<RenderSceneBuffersRD> p_render_buffers, RID p_env, RID p_fb, double p_time, float p_luminance_multiplier, float p_brightness_multiplier) {
 	ERR_FAIL_COND(p_render_buffers.is_null());
 	ERR_FAIL_COND(p_env.is_null());

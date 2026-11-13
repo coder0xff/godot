@@ -3217,6 +3217,8 @@ void RenderingServer::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("scenario_create"), &RenderingServer::scenario_create);
 	ClassDB::bind_method(D_METHOD("scenario_set_environment", "scenario", "environment"), &RenderingServer::scenario_set_environment);
+	ClassDB::bind_method(D_METHOD("probe_capture_supported"), &RenderingServer::probe_capture_supported);
+	ClassDB::bind_method(D_METHOD("probe_capture", "scenario", "origins", "near", "far", "cull_mask", "exposure", "colour", "depth"), &RenderingServer::probe_capture);
 	ClassDB::bind_method(D_METHOD("scenario_set_fallback_environment", "scenario", "environment"), &RenderingServer::scenario_set_fallback_environment);
 	ClassDB::bind_method(D_METHOD("scenario_set_camera_attributes", "scenario", "effects"), &RenderingServer::scenario_set_camera_attributes);
 	ClassDB::bind_method(D_METHOD("scenario_set_compositor", "scenario", "compositor"), &RenderingServer::scenario_set_compositor);

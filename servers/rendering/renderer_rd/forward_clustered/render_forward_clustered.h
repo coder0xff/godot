@@ -188,6 +188,17 @@ private:
 	RID _setup_sdfgi_render_pass_uniform_set(RID p_albedo_texture, RID p_emission_texture, RID p_emission_aniso_texture, RID p_geom_facing_texture, const RendererRD::MaterialStorage::Samplers &p_samplers, uint32_t p_uniform_buffer_index);
 	// While a light probe capture renders: its layers' cameras (binding 39 of the render pass set; the default buffer otherwise).
 	RID capture_layers_buffer;
+	uint32_t capture_layers_buffer_layers = 0; // The layers capture_layers_buffer holds.
+	virtual bool _has_capture_pass() const override { return true; }
+	// A probe capture's sky: the caller's arrays as runs of layers (texture views), for the multiview sky pass.
+	struct {
+		RID colour_source;
+		RID depth_source;
+		HashMap<uint64_t, RID> slices; // (texture, first layer, count) to its view.
+	} capture_sky_slices;
+	RID _capture_sky_framebuffer(const RenderDataRD *p_render_data, uint32_t p_first, uint32_t p_count);
+	// The layers a capture draws: a probe capture's faces (RenderDataRD::capture), else the views.
+	static uint32_t _capture_layer_count(const RenderDataRD *p_render_data) { return p_render_data->capture ? p_render_data->capture->count : p_render_data->scene_data->view_count; }
 	// While the capture pass's render pass set is made: single-view, no screen textures (screen-reading materials are
 	// not captured yet).
 	bool capture_render_pass = false;

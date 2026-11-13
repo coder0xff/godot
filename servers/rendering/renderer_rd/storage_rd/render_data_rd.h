@@ -79,6 +79,18 @@ public:
 
 	RenderingServerTypes::RenderInfo *render_info = nullptr;
 
+	/* Probe capture (RenderingServer::probe_capture): the faces drawn, each a layer of the caller's colour and depth
+	 * arrays, apart from the scene's views (any number of them). Null for a viewport's render. */
+	struct CaptureLayers {
+		uint32_t count = 0;
+		const Transform3D *faces = nullptr; // Each face's camera, in world space.
+		const Projection *projections = nullptr; // Each face's projection (without depth correction).
+		RID framebuffer; // The caller's colour and depth arrays, layered (framebuffer_create_layered).
+		RID colour; // The arrays themselves.
+		RID depth;
+	};
+	const CaptureLayers *capture = nullptr;
+
 	/* Viewport data */
 	bool transparent_bg = false;
 	Rect2i render_region;

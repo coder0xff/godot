@@ -3441,6 +3441,27 @@
 				Sets the filter quality for omni and spot light shadows in 3D. See also [member ProjectSettings.rendering/lights_and_shadows/positional_shadow/soft_shadow_filter_quality]. This parameter is global and cannot be set on a per-viewport basis.
 			</description>
 		</method>
+		<method name="probe_capture">
+			<return type="void" />
+			<param index="0" name="scenario" type="RID" />
+			<param index="1" name="origins" type="PackedVector3Array" />
+			<param index="2" name="near" type="float" />
+			<param index="3" name="far" type="float" />
+			<param index="4" name="cull_mask" type="int" />
+			<param index="5" name="exposure" type="float" />
+			<param index="6" name="colour" type="RID" />
+			<param index="7" name="depth" type="RID" />
+			<description>
+				Renders the cube faces of a light probe at each of [param origins] in [param scenario], six faces a probe (+X, -X, +Y, -Y, +Z, -Z: 90° cameras with the cube map's up vectors), into the layers of [param colour] and [param depth]: [RenderingDevice] 2D array textures of [code]6 * origins.size()[/code] layers, a face their size. [param colour] holds the scene's colour before tonemapping (HDR), [param depth] its depth. The scene is drawn with its own materials, lights, shadows, sky and environment, as a camera at a probe would see it, in one pass into every layer, with no viewport. [param cull_mask] selects the visual layers drawn. [param exposure] is reserved (the scenario's camera attributes apply).
+				Only with the Forward+ renderer on a device with layered output from the vertex shader; see [method probe_capture_supported].
+			</description>
+		</method>
+		<method name="probe_capture_supported" qualifiers="const">
+			<return type="bool" />
+			<description>
+				Returns [code]true[/code] if [method probe_capture] can draw on this renderer and device: the Forward+ renderer, with [constant RenderingDevice.SUPPORTS_SHADER_OUTPUT_LAYER].
+			</description>
+		</method>
 		<method name="reflection_probe_create">
 			<return type="RID" />
 			<description>

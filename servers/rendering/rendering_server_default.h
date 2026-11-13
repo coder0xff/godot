@@ -943,6 +943,9 @@ public:
 	FUNC2(scenario_set_fallback_environment, RID, RID)
 	FUNC2(scenario_set_compositor, RID, RID)
 
+	FUNC0RC(bool, probe_capture_supported)
+	FUNC8(probe_capture, RID, const PackedVector3Array &, float, float, uint32_t, float, RID, RID)
+
 	/* INSTANCING API */
 	FUNCRIDSPLIT(instance)
 
