@@ -329,15 +329,15 @@ public:
 	EXBIND2(body_set_user_flags, RID, uint32_t)
 	EXBIND1RC(uint32_t, body_get_user_flags, RID)
 
-	GDVIRTUAL2R(Error, _body_set_material, RID, Object *)
-	GDVIRTUAL1RC(Object *, _body_get_material, RID)
-	virtual Error body_set_material(RID p_body, Object *p_material) override {
+	GDVIRTUAL2R(Error, _body_set_material, RID, Ref<Resource>)
+	GDVIRTUAL1RC(Ref<Resource>, _body_get_material, RID)
+	virtual Error body_set_material(RID p_body, const Ref<Resource> &p_material) override {
 		Error result = ERR_UNAVAILABLE;
 		GDVIRTUAL_CALL(_body_set_material, p_body, p_material, result);
 		return result;
 	}
-	virtual Object *body_get_material(RID p_body) const override {
-		Object *result = nullptr;
+	virtual Ref<Resource> body_get_material(RID p_body) const override {
+		Ref<Resource> result;
 		GDVIRTUAL_CALL(_body_get_material, p_body, result);
 		return result;
 	}

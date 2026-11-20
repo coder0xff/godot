@@ -125,22 +125,25 @@ public:
 	real_t last_bounce = 0.0;
 
 	RID body_create() override { return RID::from_uint64(next_body++); }
-	Error body_set_material(RID p_body, Object *p_material) override {
+	Error body_set_material(RID p_body, const Ref<Resource> &p_material) override {
 		submissions++;
 		if (admission != OK) {
 			return admission;
 		}
-		PhysicsMaterial *material = Object::cast_to<PhysicsMaterial>(p_material);
-		if (material) {
+		Ref<PhysicsMaterial> material = p_material;
+		if (p_material.is_valid() && material.is_null()) {
+			return ERR_INVALID_PARAMETER;
+		}
+		if (material.is_valid()) {
 			accepted[p_body] = material->duplicate(true);
 		} else {
 			accepted.erase(p_body);
 		}
 		return OK;
 	}
-	Object *body_get_material(RID p_body) const override {
+	Ref<Resource> body_get_material(RID p_body) const override {
 		const Ref<PhysicsMaterial> *material = accepted.getptr(p_body);
-		return material ? material->ptr() : nullptr;
+		return material ? (*material)->duplicate(true) : Ref<Resource>();
 	}
 	void body_set_param(RID p_body, PS3DE::BodyParameter p_param, const Variant &p_value) override {
 		if (p_param == PS3DE::BODY_PARAM_FRICTION) {
@@ -248,13 +251,13 @@ TEST_CASE("[Physics_material] Native and optional extension servers keep the leg
 	material.instantiate();
 	{
 		PhysicsServer3DDummy server;
-		CHECK(server.body_set_material(RID(), material.ptr()) == ERR_UNAVAILABLE);
-		CHECK(server.body_get_material(RID()) == nullptr);
+		CHECK(server.body_set_material(RID(), material) == ERR_UNAVAILABLE);
+		CHECK(server.body_get_material(RID()).is_null());
 	}
 	{
 		PhysicsServer3DExtension server;
-		CHECK(server.body_set_material(RID(), material.ptr()) == ERR_UNAVAILABLE);
-		CHECK(server.body_get_material(RID()) == nullptr);
+		CHECK(server.body_set_material(RID(), material) == ERR_UNAVAILABLE);
+		CHECK(server.body_get_material(RID()).is_null());
 	}
 }
 
@@ -280,14 +283,14 @@ void check_material_node() {
 	CHECK(server->coefficient_writes == writes);
 	first->set_density(-1.0);
 	CHECK(body->get_physics_material_override() == first); // User's edited resource stays attached.
-	PhysicsMaterial *simulated = Object::cast_to<PhysicsMaterial>(server->body_get_material(body->get_rid()));
-	REQUIRE(simulated);
+	Ref<PhysicsMaterial> simulated = server->body_get_material(body->get_rid());
+	REQUIRE(simulated.is_valid());
 	CHECK(simulated->get_density() == 100.0);
 	CHECK(server->coefficient_writes == writes);
 	server->admission = OK;
 	first->set_density(200.0);
-	simulated = Object::cast_to<PhysicsMaterial>(server->body_get_material(body->get_rid()));
-	REQUIRE(simulated);
+	simulated = server->body_get_material(body->get_rid());
+	REQUIRE(simulated.is_valid());
 	CHECK(simulated->get_density() == 200.0);
 	body->set_physics_material_override(Ref<PhysicsMaterial>());
 	CHECK(body->get_physics_material_override().is_null());
@@ -358,20 +361,48 @@ TEST_CASE("[Physics_material] Shared nested Curve refusal retains both authored 
 	CHECK(rigid->get_physics_material_override() == material);
 	CHECK(stationary->get_physics_material_override() == material);
 	for (RID body : {rigid->get_rid(), stationary->get_rid()}) {
-		PhysicsMaterial *snapshot = Object::cast_to<PhysicsMaterial>(server->body_get_material(body));
-		REQUIRE(snapshot);
+		Ref<PhysicsMaterial> snapshot = server->body_get_material(body);
+		REQUIRE(snapshot.is_valid());
 		CHECK(snapshot->get_yield_curve()->get_point_count() == 1);
 	}
 	server->admission = OK;
 	curve->add_point(Vector2(0.5, 0.75));
 	for (RID body : {rigid->get_rid(), stationary->get_rid()}) {
-		PhysicsMaterial *snapshot = Object::cast_to<PhysicsMaterial>(server->body_get_material(body));
-		REQUIRE(snapshot);
+		Ref<PhysicsMaterial> snapshot = server->body_get_material(body);
+		REQUIRE(snapshot.is_valid());
 		CHECK(snapshot->get_yield_curve()->get_point_count() == 3);
 	}
 	memdelete(rigid);
 	memdelete(stationary);
 	memdelete(server);
+}
+
+TEST_CASE("[Physics_material] Getter returns an owned independent snapshot with a bounded lifetime") {
+	Ref<Resource> returned;
+	ObjectID returned_id;
+	{
+		MaterialServer *server = memnew(MaterialServer);
+		Ref<PhysicsMaterial> authored;
+		authored.instantiate();
+		authored->set_density(100.0);
+		RID body = server->body_create();
+		CHECK(server->body_set_material(body, authored) == OK);
+		returned = server->body_get_material(body);
+		REQUIRE(returned.is_valid());
+		returned_id = returned->get_instance_id();
+		Ref<PhysicsMaterial> snapshot = returned;
+		CHECK(snapshot != authored);
+		snapshot->set_density(300.0);
+		CHECK(authored->get_density() == 100.0);
+		Ref<PhysicsMaterial> again = server->body_get_material(body);
+		CHECK(again->get_density() == 100.0);
+		CHECK(server->body_set_material(body, Ref<Resource>()) == OK);
+		memdelete(server);
+		CHECK(ObjectDB::get_instance(returned_id) == returned.ptr());
+	}
+	CHECK(ObjectDB::get_instance(returned_id) == returned.ptr());
+	returned.unref();
+	CHECK(ObjectDB::get_instance(returned_id) == nullptr);
 }
 
 } // namespace TestPhysicsMaterial

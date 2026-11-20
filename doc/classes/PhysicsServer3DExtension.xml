@@ -338,10 +338,10 @@
 			</description>
 		</method>
 		<method name="_body_get_material" qualifiers="virtual const">
-			<return type="Object" />
+			<return type="Resource" />
 			<param index="0" name="body" type="RID" />
 			<description>
-				Returns a PhysicsMaterial snapshot of what the opting-in server simulates. It may differ from an edited resource still attached to the node after refusal. The default is null. Returned snapshot edits do not alter simulation; assign a material to request a change.
+				Returns a caller-owned, independent reference-counted duplicate of the last accepted PhysicsMaterial snapshot of what the opting-in server simulates. It may differ from an edited resource still attached to the node after refusal. The default is null. Returned snapshot edits do not alter simulation; assign a material to request a change.
 			</description>
 		</method>
 		<method name="_body_get_max_contacts_reported" qualifiers="virtual required const">
@@ -522,7 +522,7 @@
 		<method name="_body_set_material" qualifiers="virtual">
 			<return type="int" enum="Error" />
 			<param index="0" name="body" type="RID" />
-			<param index="1" name="material" type="Object" />
+			<param index="1" name="material" type="Resource" />
 			<description>
 				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers.
 			</description>

@@ -216,8 +216,8 @@ public:
 	FUNC2(body_set_user_flags, RID, uint32_t);
 	FUNC1RC(uint32_t, body_get_user_flags, RID);
 
-	FUNC2R(Error, body_set_material, RID, Object *);
-	FUNC1RC(Object *, body_get_material, RID);
+	FUNC2R(Error, body_set_material, RID, const Ref<Resource> &);
+	FUNC1RC(Ref<Resource>, body_get_material, RID);
 
 	FUNC3(body_set_param, RID, PS3DE::BodyParameter, const Variant &);
 	FUNC2RC(Variant, body_get_param, RID, PS3DE::BodyParameter);

@@ -406,7 +406,7 @@ const Vector3 &RigidBody3D::get_center_of_mass() const {
 }
 
 void RigidBody3D::set_physics_material_override(const Ref<PhysicsMaterial> &p_physics_material_override) {
-	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), p_physics_material_override.ptr());
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), p_physics_material_override);
 	if (result != OK && result != ERR_UNAVAILABLE) {
 		return; // The server reported why admission failed; retain the previous override and coefficients.
 	}
@@ -663,7 +663,7 @@ TypedArray<Node3D> RigidBody3D::get_colliding_bodies() const {
 }
 
 void RigidBody3D::_reload_physics_characteristics() {
-	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), physics_material_override.ptr());
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), physics_material_override);
 	if (result != OK && result != ERR_UNAVAILABLE) {
 		return; // Keep the user's edited resource attached, but do not change the simulated revision.
 	}
