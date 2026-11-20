@@ -342,6 +342,7 @@
 			<param index="0" name="body" type="RID" />
 			<description>
 				Returns a caller-owned, independent reference-counted duplicate of the last accepted PhysicsMaterial snapshot of what the opting-in server simulates. It may differ from an edited resource still attached to the node after refusal. The default is null. Returned snapshot edits do not alter simulation; assign a material to request a change.
+			With Fields, the returned yield Curve contains the accepted piecewise-linear sampled table with LINEAR tangents, at Godot Curve storage precision (f32 in standard builds); the authored Curve remains unchanged.
 			</description>
 		</method>
 		<method name="_body_get_max_contacts_reported" qualifiers="virtual required const">
@@ -524,7 +525,7 @@
 			<param index="0" name="body" type="RID" />
 			<param index="1" name="material" type="Resource" />
 			<description>
-				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers. With Fields, call this on the main thread. Direct server callers must resubmit after editing a resource: the server does not subscribe to it. Physics nodes resubmit automatically on changed, including nested yield Curve changes.
+				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers. With Fields, conversion runs on the calling thread, including threaded scene loading. Direct server callers must resubmit after editing a resource: the server does not subscribe to it. Physics nodes resubmit automatically on changed, including nested yield Curve changes.
 			</description>
 		</method>
 		<method name="_body_set_max_contacts_reported" qualifiers="virtual required">
