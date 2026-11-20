@@ -524,7 +524,7 @@
 			<param index="0" name="body" type="RID" />
 			<param index="1" name="material" type="Resource" />
 			<description>
-				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers.
+				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers. With Fields, call this on the main thread. Direct server callers must resubmit after editing a resource: the server does not subscribe to it. Physics nodes resubmit automatically on changed, including nested yield Curve changes.
 			</description>
 		</method>
 		<method name="_body_set_max_contacts_reported" qualifiers="virtual required">
