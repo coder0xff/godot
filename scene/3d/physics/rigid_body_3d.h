@@ -249,6 +249,7 @@ public:
 
 private:
 	void _reload_physics_characteristics();
+	void _apply_physics_characteristics();
 };
 
 VARIANT_ENUM_CAST(RigidBody3D::FreezeMode);

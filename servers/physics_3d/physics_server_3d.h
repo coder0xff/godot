@@ -199,6 +199,9 @@ public:
 
 	// common body variables
 
+	virtual Error body_set_material(RID p_body, Object *p_material) { return ERR_UNAVAILABLE; }
+	virtual Object *body_get_material(RID p_body) const { return nullptr; }
+
 	virtual void body_set_param(RID p_body, PS3DE::BodyParameter p_param, const Variant &p_value) = 0;
 	virtual Variant body_get_param(RID p_body, PS3DE::BodyParameter p_param) const = 0;
 

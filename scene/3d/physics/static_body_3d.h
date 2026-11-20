@@ -65,6 +65,7 @@ public:
 
 private:
 	void _reload_physics_characteristics();
+	void _apply_physics_characteristics();
 
 #ifndef NAVIGATION_3D_DISABLED
 	static Callable _navmesh_source_geometry_parsing_callback;

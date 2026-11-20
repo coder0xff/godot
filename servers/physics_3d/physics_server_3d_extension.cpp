@@ -258,6 +258,9 @@ void PhysicsServer3DExtension::_bind_methods() {
 	GDVIRTUAL_BIND(_body_set_user_flags, "body", "flags");
 	GDVIRTUAL_BIND(_body_get_user_flags, "body");
 
+	GDVIRTUAL_BIND(_body_set_material, "body", "material");
+	GDVIRTUAL_BIND(_body_get_material, "body");
+
 	GDVIRTUAL_BIND(_body_set_param, "body", "param", "value");
 	GDVIRTUAL_BIND(_body_get_param, "body", "param");
 

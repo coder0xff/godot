@@ -54,6 +54,10 @@ RID StaticBody3D::_navmesh_source_geometry_parser;
 #endif // NAVIGATION_3D_DISABLED
 
 void StaticBody3D::set_physics_material_override(const Ref<PhysicsMaterial> &p_physics_material_override) {
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), p_physics_material_override.ptr());
+	if (result != OK && result != ERR_UNAVAILABLE) {
+		return; // The server reported why admission failed; retain the previous override and coefficients.
+	}
 	if (physics_material_override.is_valid()) {
 		physics_material_override->disconnect_changed(callable_mp(this, &StaticBody3D::_reload_physics_characteristics));
 	}
@@ -63,7 +67,7 @@ void StaticBody3D::set_physics_material_override(const Ref<PhysicsMaterial> &p_p
 	if (physics_material_override.is_valid()) {
 		physics_material_override->connect_changed(callable_mp(this, &StaticBody3D::_reload_physics_characteristics));
 	}
-	_reload_physics_characteristics();
+	_apply_physics_characteristics();
 }
 
 Ref<PhysicsMaterial> StaticBody3D::get_physics_material_override() const {
@@ -91,6 +95,14 @@ Vector3 StaticBody3D::get_constant_angular_velocity() const {
 }
 
 void StaticBody3D::_reload_physics_characteristics() {
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), physics_material_override.ptr());
+	if (result != OK && result != ERR_UNAVAILABLE) {
+		return; // Keep the user's edited resource attached, but do not change the simulated revision.
+	}
+	_apply_physics_characteristics();
+}
+
+void StaticBody3D::_apply_physics_characteristics() {
 	if (physics_material_override.is_null()) {
 		PhysicsServer3D::get_singleton()->body_set_param(get_rid(), PS3DE::BODY_PARAM_BOUNCE, 0);
 		PhysicsServer3D::get_singleton()->body_set_param(get_rid(), PS3DE::BODY_PARAM_FRICTION, 1);

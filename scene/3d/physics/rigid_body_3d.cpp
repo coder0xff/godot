@@ -406,6 +406,10 @@ const Vector3 &RigidBody3D::get_center_of_mass() const {
 }
 
 void RigidBody3D::set_physics_material_override(const Ref<PhysicsMaterial> &p_physics_material_override) {
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), p_physics_material_override.ptr());
+	if (result != OK && result != ERR_UNAVAILABLE) {
+		return; // The server reported why admission failed; retain the previous override and coefficients.
+	}
 	if (physics_material_override.is_valid()) {
 		physics_material_override->disconnect_changed(callable_mp(this, &RigidBody3D::_reload_physics_characteristics));
 	}
@@ -415,7 +419,7 @@ void RigidBody3D::set_physics_material_override(const Ref<PhysicsMaterial> &p_ph
 	if (physics_material_override.is_valid()) {
 		physics_material_override->connect_changed(callable_mp(this, &RigidBody3D::_reload_physics_characteristics));
 	}
-	_reload_physics_characteristics();
+	_apply_physics_characteristics();
 }
 
 Ref<PhysicsMaterial> RigidBody3D::get_physics_material_override() const {
@@ -659,6 +663,14 @@ TypedArray<Node3D> RigidBody3D::get_colliding_bodies() const {
 }
 
 void RigidBody3D::_reload_physics_characteristics() {
+	Error result = PhysicsServer3D::get_singleton()->body_set_material(get_rid(), physics_material_override.ptr());
+	if (result != OK && result != ERR_UNAVAILABLE) {
+		return; // Keep the user's edited resource attached, but do not change the simulated revision.
+	}
+	_apply_physics_characteristics();
+}
+
+void RigidBody3D::_apply_physics_characteristics() {
 	if (physics_material_override.is_null()) {
 		PhysicsServer3D::get_singleton()->body_set_param(get_rid(), PS3DE::BODY_PARAM_BOUNCE, 0);
 		PhysicsServer3D::get_singleton()->body_set_param(get_rid(), PS3DE::BODY_PARAM_FRICTION, 1);

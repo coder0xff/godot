@@ -400,6 +400,13 @@
 				Returns the [PhysicsDirectBodyState3D] of the body. Returns [code]null[/code] if the body is destroyed or removed from the physics space.
 			</description>
 		</method>
+		<method name="body_get_material" qualifiers="const">
+			<return type="Object" />
+			<param index="0" name="body" type="RID" />
+			<description>
+				Returns a PhysicsMaterial snapshot of what the opting-in server simulates. It may differ from an edited resource still attached to the node after refusal. The default is null. Returned snapshot edits do not alter simulation; assign a material to request a change.
+			</description>
+		</method>
 		<method name="body_get_max_contacts_reported" qualifiers="const">
 			<return type="int" />
 			<param index="0" name="body" type="RID" />
@@ -591,6 +598,14 @@
 				1. [code]state[/code]: a [PhysicsDirectBodyState3D], used to retrieve and modify the body's state,
 				2. [code skip-lint]userdata[/code]: a [Variant]; its value will be the [param userdata] passed into this method.
 				If [param userdata] is [code]null[/code], then [param callable] must take only the [code]state[/code] parameter.
+			</description>
+		</method>
+		<method name="body_set_material">
+			<return type="int" enum="Error" />
+			<param index="0" name="body" type="RID" />
+			<param index="1" name="material" type="Object" />
+			<description>
+				Assigns a PhysicsMaterial to an opting-in server. Null clears the body override and selects the project default. Returns OK only after admission; a refused revision leaves the last accepted simulation state unchanged. The default is ERR_UNAVAILABLE, preserving the native friction/bounce paths. This virtual is optional for extension servers.
 			</description>
 		</method>
 		<method name="body_set_max_contacts_reported">

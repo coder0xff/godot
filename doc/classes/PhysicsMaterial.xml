@@ -1,13 +1,183 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<class name="PhysicsMaterial" inherits="Resource" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+<class xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="PhysicsMaterial" inherits="Resource" api_type="core" xsi:noNamespaceSchemaLocation="../class.xsd">
 	<brief_description>
-		Holds physics-related properties of a surface, namely its roughness and bounciness.
+		Surface properties and optional Fields material properties for physics bodies.
 	</brief_description>
 	<description>
-		Holds physics-related properties of a surface, namely its roughness and bounciness. This class is used to apply these properties to a physics body.
+		The existing friction, roughness, bounce and absorbency properties retain their native physics-server behavior.
+		Fields properties start unset. Call the corresponding [code]has_...()[/code] method to distinguish an unset value from an explicitly assigned zero, and [code]clear_...()[/code] to return to inheritance. Inspector checkboxes expose the same flags. Scalar getters return the dormant stored value while unset, not the effective project default.
+		With Fields, unset properties inherit from the complete material at project setting [code]physics/3d/fields/default_material[/code], registered by the Fields addon with default path [code]res://addons/fields/materials/presets/steel.tres[/code]. A body without an override uses that same default. An incomplete or contradictory default is refused with an error naming the setting; there is no hard-coded fallback material.
+		Only yield supports a Curve today. Heat capacities, density, conductivity and emissivity are constants; resistivity is an affine temperature fit. Other Curves will be supported when the engine has the corresponding tables.
+		Fields validates an assignment or changed resource before accepting its revision. On refusal, the node keeps the user's resource, while simulation retains its last accepted revision; [method PhysicsServer3D.body_get_material] reads the simulated material. Native servers that do not opt in ignore these additional properties.
 	</description>
 	<tutorials>
 	</tutorials>
+	<methods>
+		<method name="clear_density">
+			<return type="void" />
+			<description>Unsets [member density], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_emissivity">
+			<return type="void" />
+			<description>Unsets [member emissivity], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_latent_heat">
+			<return type="void" />
+			<description>Unsets [member latent_heat], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_liquid_specific_heat">
+			<return type="void" />
+			<description>Unsets [member liquid_specific_heat], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_melting_temperature">
+			<return type="void" />
+			<description>Unsets [member melting_temperature], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_resistivity">
+			<return type="void" />
+			<description>Unsets [member resistivity], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_resistivity_temperature_coefficient">
+			<return type="void" />
+			<description>Unsets [member resistivity_temperature_coefficient], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_specific_heat">
+			<return type="void" />
+			<description>Unsets [member specific_heat], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_thermal_conductivity">
+			<return type="void" />
+			<description>Unsets [member thermal_conductivity], restoring inheritance from the project default material.</description>
+		</method>
+		<method name="clear_yield">
+			<return type="void" />
+			<description>Unsets the entire yield group. Later admission uses the project default material's yield law.</description>
+		</method>
+		<method name="clear_yield_curve">
+			<return type="void" />
+			<description>Calls [method clear_yield], returning the entire yield group to inheritance.</description>
+		</method>
+		<method name="clear_yield_enabled">
+			<return type="void" />
+			<description>Calls [method clear_yield], returning the entire yield group to inheritance.</description>
+		</method>
+		<method name="clear_yield_stress">
+			<return type="void" />
+			<description>Calls [method clear_yield], returning the entire yield group to inheritance.</description>
+		</method>
+		<method name="has_density">
+			<return type="bool" />
+			<description>Returns whether [member density] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_emissivity">
+			<return type="bool" />
+			<description>Returns whether [member emissivity] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_latent_heat">
+			<return type="bool" />
+			<description>Returns whether [member latent_heat] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_liquid_specific_heat">
+			<return type="bool" />
+			<description>Returns whether [member liquid_specific_heat] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_melting_temperature">
+			<return type="bool" />
+			<description>Returns whether [member melting_temperature] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_resistivity">
+			<return type="bool" />
+			<description>Returns whether [member resistivity] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_resistivity_temperature_coefficient">
+			<return type="bool" />
+			<description>Returns whether [member resistivity_temperature_coefficient] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_specific_heat">
+			<return type="bool" />
+			<description>Returns whether [member specific_heat] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_thermal_conductivity">
+			<return type="bool" />
+			<description>Returns whether [member thermal_conductivity] is explicitly set rather than inherited.</description>
+		</method>
+		<method name="has_yield">
+			<return type="bool" />
+			<description>Returns whether enabled, stress and Curve form an explicitly assigned yield group.</description>
+		</method>
+		<method name="has_yield_curve">
+			<return type="bool" />
+			<description>Returns [method has_yield]; the yield group shares one set flag.</description>
+		</method>
+		<method name="has_yield_enabled">
+			<return type="bool" />
+			<description>Returns [method has_yield]; the yield group shares one set flag.</description>
+		</method>
+		<method name="has_yield_stress">
+			<return type="bool" />
+			<description>Returns [method has_yield]; the yield group shares one set flag.</description>
+		</method>
+		<method name="set_density">
+			<return type="void" />
+			<param index="0" name="density" type="float" />
+			<description>Explicitly sets [member density]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_emissivity">
+			<return type="void" />
+			<param index="0" name="emissivity" type="float" />
+			<description>Explicitly sets [member emissivity]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_latent_heat">
+			<return type="void" />
+			<param index="0" name="latent_heat" type="float" />
+			<description>Explicitly sets [member latent_heat]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_liquid_specific_heat">
+			<return type="void" />
+			<param index="0" name="liquid_specific_heat" type="float" />
+			<description>Explicitly sets [member liquid_specific_heat]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_melting_temperature">
+			<return type="void" />
+			<param index="0" name="melting_temperature" type="float" />
+			<description>Explicitly sets [member melting_temperature]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_resistivity">
+			<return type="void" />
+			<param index="0" name="resistivity" type="float" />
+			<description>Explicitly sets [member resistivity]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_resistivity_temperature_coefficient">
+			<return type="void" />
+			<param index="0" name="resistivity_temperature_coefficient" type="float" />
+			<description>Explicitly sets [member resistivity_temperature_coefficient]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_specific_heat">
+			<return type="void" />
+			<param index="0" name="specific_heat" type="float" />
+			<description>Explicitly sets [member specific_heat]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_thermal_conductivity">
+			<return type="void" />
+			<param index="0" name="thermal_conductivity" type="float" />
+			<description>Explicitly sets [member thermal_conductivity]. Admission validation is performed by the selected server.</description>
+		</method>
+		<method name="set_yield_curve">
+			<return type="void" />
+			<param index="0" name="yield_curve" type="Curve" />
+			<description>Sets [member yield_curve] and marks the yield group explicit.</description>
+		</method>
+		<method name="set_yield_enabled">
+			<return type="void" />
+			<param index="0" name="yield_enabled" type="bool" />
+			<description>Sets [member yield_enabled] and marks the yield group explicit.</description>
+		</method>
+		<method name="set_yield_stress">
+			<return type="void" />
+			<param index="0" name="yield_stress" type="float" />
+			<description>Sets [member yield_stress] and marks the yield group explicit.</description>
+		</method>
+	</methods>
 	<members>
 		<member name="absorbent" type="bool" setter="set_absorbent" getter="is_absorbent" default="false">
 			If [code]true[/code], subtracts the bounciness from the colliding object's bounciness instead of adding it.
@@ -16,11 +186,24 @@
 			The body's bounciness. Values range from [code]0[/code] (no bounce) to [code]1[/code] (full bounciness).
 			[b]Note:[/b] Even with [member bounce] set to [code]1.0[/code], some energy will be lost over time due to linear and angular damping. To have a physics body that preserves all its energy over time, set [member bounce] to [code]1.0[/code], the body's linear damp mode to [b]Replace[/b] (if applicable), its linear damp to [code]0.0[/code], its angular damp mode to [b]Replace[/b] (if applicable), and its angular damp to [code]0.0[/code].
 		</member>
+		<member name="density" type="float" setter="_set_density" getter="get_density">Assigned density. Mechanical mass overrides do not change this thermal/electrical material density. Unit: kg/m³. Unset initially; use [method has_density] and [method clear_density].</member>
+		<member name="emissivity" type="float" setter="_set_emissivity" getter="get_emissivity">Constant opaque grey-body hemispherical emissivity between [code]0[/code] and [code]1[/code]. Unit: dimensionless. Unset initially; use [method has_emissivity] and [method clear_emissivity].</member>
 		<member name="friction" type="float" setter="set_friction" getter="get_friction" default="1.0">
 			The body's friction. Values range from [code]0[/code] (frictionless) to [code]1[/code] (maximum friction).
 		</member>
+		<member name="latent_heat" type="float" setter="_set_latent_heat" getter="get_latent_heat">Latent heat. Zero gives a zero-width enthalpy plateau. Unit: J/kg. Unset initially; use [method has_latent_heat] and [method clear_latent_heat].</member>
+		<member name="liquid_specific_heat" type="float" setter="_set_liquid_specific_heat" getter="get_liquid_specific_heat">Constant liquid specific heat. Unit: J/(kg K). Unset initially; use [method has_liquid_specific_heat] and [method clear_liquid_specific_heat].</member>
+		<member name="material_revision" type="int" getter="get_material_revision">Read-only content revision, advanced before the changed signal, including nested yield Curve edits. It is not serialized and is not a physical quantity.</member>
+		<member name="melting_temperature" type="float" setter="_set_melting_temperature" getter="get_melting_temperature">Absolute melting temperature, used with the heat capacities and latent heat to derive enthalpy. Unit: K. Unset initially; use [method has_melting_temperature] and [method clear_melting_temperature].</member>
+		<member name="resistivity" type="float" setter="_set_resistivity" getter="get_resistivity">Electrical resistivity at 293.15 K. Unit: Ω m. Unset initially; use [method has_resistivity] and [method clear_resistivity].</member>
+		<member name="resistivity_temperature_coefficient" type="float" setter="_set_resistivity_temperature_coefficient" getter="get_resistivity_temperature_coefficient">Signed coefficient in resistivity(T) = resistivity * (1 + coefficient * (T - 293.15 K)). Unit: 1/K. Unset initially; use [method has_resistivity_temperature_coefficient] and [method clear_resistivity_temperature_coefficient].</member>
 		<member name="rough" type="bool" setter="set_rough" getter="is_rough" default="false">
 			If [code]true[/code], the physics engine will use the friction of the object marked as "rough" when two objects collide. If [code]false[/code], the physics engine will use the lowest friction of all colliding objects instead. If [code]true[/code] for both colliding objects, the physics engine will use the highest friction.
 		</member>
+		<member name="specific_heat" type="float" setter="_set_specific_heat" getter="get_specific_heat">Constant solid specific heat. Unit: J/(kg K). Unset initially; use [method has_specific_heat] and [method clear_specific_heat].</member>
+		<member name="thermal_conductivity" type="float" setter="_set_thermal_conductivity" getter="get_thermal_conductivity">Constant thermal conductivity. Unit: W/(m K). Unset initially; use [method has_thermal_conductivity] and [method clear_thermal_conductivity].</member>
+		<member name="yield_curve" type="Curve" setter="_set_yield_curve" getter="get_yield_curve">Yield factor against absolute Kelvin temperature. A null Curve means constant factor 1 when yield is enabled. Linear Curves are represented exactly up to 32 points; more than 32 linear points or any non-positive factor is refused. Nonlinear Curves are sampled adaptively up to 32 points, warning if relative deviation exceeds 0.5%. Use a Kelvin domain rather than Curve's default normalized domain. Enabled, stress and Curve share one set flag; unsetting any returns the entire yield group to the project default.</member>
+		<member name="yield_enabled" type="bool" setter="_set_yield_enabled" getter="is_yield_enabled">Whether the material has a yield law. False explicitly selects an elastic law. Enabled, stress and Curve share one set flag; unsetting any returns the entire yield group to the project default.</member>
+		<member name="yield_stress" type="float" setter="_set_yield_stress" getter="get_yield_stress">Positive reference yield stress in Pa. Enabled, stress and Curve share one set flag; unsetting any returns the entire yield group to the project default.</member>
 	</members>
 </class>

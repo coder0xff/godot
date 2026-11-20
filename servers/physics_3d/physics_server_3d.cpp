@@ -196,6 +196,9 @@ void PhysicsServer3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("body_set_enable_continuous_collision_detection", "body", "enable"), &PhysicsServer3D::body_set_enable_continuous_collision_detection);
 	ClassDB::bind_method(D_METHOD("body_is_continuous_collision_detection_enabled", "body"), &PhysicsServer3D::body_is_continuous_collision_detection_enabled);
 
+	ClassDB::bind_method(D_METHOD("body_set_material", "body", "material"), &PhysicsServer3D::body_set_material);
+	ClassDB::bind_method(D_METHOD("body_get_material", "body"), &PhysicsServer3D::body_get_material);
+
 	ClassDB::bind_method(D_METHOD("body_set_param", "body", "param", "value"), &PhysicsServer3D::body_set_param);
 	ClassDB::bind_method(D_METHOD("body_get_param", "body", "param"), &PhysicsServer3D::body_get_param);
 
