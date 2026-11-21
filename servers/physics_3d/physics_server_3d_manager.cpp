@@ -34,6 +34,11 @@
 #include "core/object/class_db.h"
 #include "servers/physics_3d/physics_server_3d.h"
 #include "servers/physics_3d/physics_server_3d_dummy.h"
+#include "servers/rendering/rendering_server.h"
+
+#ifdef RD_ENABLED
+#include "servers/rendering/rendering_device.h"
+#endif // RD_ENABLED
 
 static PhysicsServer3D *physics_server_3d = nullptr;
 
@@ -92,6 +97,7 @@ void PhysicsServer3DManager::on_servers_changed() {
 
 void PhysicsServer3DManager::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("register_server", "name", "create_callback"), &PhysicsServer3DManager::register_server);
+	ClassDB::bind_method(D_METHOD("register_server_with_rendering_device", "name", "create_callback"), &PhysicsServer3DManager::register_server_with_rendering_device);
 	ClassDB::bind_method(D_METHOD("set_default_server", "name", "priority"), &PhysicsServer3DManager::set_default_server);
 }
 
@@ -104,6 +110,36 @@ void PhysicsServer3DManager::register_server(const String &p_name, const Callabl
 	ERR_FAIL_COND(find_server_id(p_name) != -1);
 	physics_servers.push_back(ClassInfo(p_name, p_create_callback));
 	on_servers_changed();
+}
+
+void PhysicsServer3DManager::register_server_with_rendering_device(const String &p_name, const Callable &p_create_callback) {
+	ERR_FAIL_COND(find_server_id(p_name) != -1);
+	physics_servers.push_back(ClassInfo(p_name, p_create_callback, true));
+	on_servers_changed();
+}
+
+PhysicsServer3D *PhysicsServer3DManager::_create_server(const ClassInfo &p_info) {
+	Variant ret;
+	Callable::CallError ce;
+	if (p_info.takes_rendering_device) {
+		// The RenderingServer is created before the physics server (Main::setup2), but registered as a named singleton
+		// only after it, so a server cannot look the device up while it is made: it is given it. Null without a
+		// RenderingDevice (the Compatibility renderer, headless, or a build without RenderingDevice).
+		Object *device_object = nullptr;
+#ifdef RD_ENABLED
+		RenderingServer *rendering_server = RenderingServer::get_singleton();
+		if (rendering_server) {
+			device_object = rendering_server->get_rendering_device();
+		}
+#endif // RD_ENABLED
+		const Variant device = device_object;
+		const Variant *args[1] = { &device };
+		p_info.create_callback.callp(args, 1, ret, ce);
+	} else {
+		p_info.create_callback.callp(nullptr, 0, ret, ce);
+	}
+	ERR_FAIL_COND_V(ce.error != Callable::CallError::CALL_OK, nullptr);
+	return Object::cast_to<PhysicsServer3D>(ret.get_validated_object());
 }
 
 void PhysicsServer3DManager::set_default_server(const String &p_name, int p_priority) {
@@ -137,22 +173,13 @@ PhysicsServer3D *PhysicsServer3DManager::new_default_server() {
 	if (default_server_id == -1) {
 		return nullptr;
 	}
-	Variant ret;
-	Callable::CallError ce;
-	physics_servers[default_server_id].create_callback.callp(nullptr, 0, ret, ce);
-	ERR_FAIL_COND_V(ce.error != Callable::CallError::CALL_OK, nullptr);
-	return Object::cast_to<PhysicsServer3D>(ret.get_validated_object());
+	return _create_server(physics_servers[default_server_id]);
 }
 
 PhysicsServer3D *PhysicsServer3DManager::new_server(const String &p_name) {
 	int id = find_server_id(p_name);
 	if (id == -1) {
 		return nullptr;
-	} else {
-		Variant ret;
-		Callable::CallError ce;
-		physics_servers[id].create_callback.callp(nullptr, 0, ret, ce);
-		ERR_FAIL_COND_V(ce.error != Callable::CallError::CALL_OK, nullptr);
-		return Object::cast_to<PhysicsServer3D>(ret.get_validated_object());
 	}
+	return _create_server(physics_servers[id]);
 }
