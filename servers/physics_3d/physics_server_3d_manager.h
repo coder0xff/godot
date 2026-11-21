@@ -42,20 +42,25 @@ class PhysicsServer3DManager : public Object {
 	struct ClassInfo {
 		String name;
 		Callable create_callback;
+		// Whether create_callback takes the main RenderingDevice (register_server_with_rendering_device).
+		bool takes_rendering_device = false;
 
 		ClassInfo() {}
 
-		ClassInfo(String p_name, Callable p_create_callback) :
+		ClassInfo(String p_name, Callable p_create_callback, bool p_takes_rendering_device = false) :
 				name(p_name),
-				create_callback(p_create_callback) {}
+				create_callback(p_create_callback),
+				takes_rendering_device(p_takes_rendering_device) {}
 
 		ClassInfo(const ClassInfo &p_ci) :
 				name(p_ci.name),
-				create_callback(p_ci.create_callback) {}
+				create_callback(p_ci.create_callback),
+				takes_rendering_device(p_ci.takes_rendering_device) {}
 
 		void operator=(const ClassInfo &p_ci) {
 			name = p_ci.name;
 			create_callback = p_ci.create_callback;
+			takes_rendering_device = p_ci.takes_rendering_device;
 		}
 	};
 
@@ -64,6 +69,7 @@ class PhysicsServer3DManager : public Object {
 	int default_server_priority = -1;
 
 	void on_servers_changed();
+	PhysicsServer3D *_create_server(const ClassInfo &p_info);
 
 protected:
 	static void _bind_methods();
@@ -76,6 +82,7 @@ public:
 	static PhysicsServer3DManager *get_singleton();
 
 	void register_server(const String &p_name, const Callable &p_create_callback);
+	void register_server_with_rendering_device(const String &p_name, const Callable &p_create_callback);
 	void set_default_server(const String &p_name, int p_priority = 0);
 	int find_server_id(const String &p_name);
 	int get_servers_count();

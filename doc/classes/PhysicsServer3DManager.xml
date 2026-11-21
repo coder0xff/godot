@@ -18,6 +18,14 @@
 				Register a [PhysicsServer3D] implementation by passing a [param name] and a [Callable] that returns a [PhysicsServer3D] object.
 			</description>
 		</method>
+		<method name="register_server_with_rendering_device">
+			<return type="void" />
+			<param index="0" name="name" type="String" />
+			<param index="1" name="create_callback" type="Callable" />
+			<description>
+				Register a [PhysicsServer3D] implementation that uses the GPU, like [method register_server], except that [param create_callback] takes one argument: the main [RenderingDevice], or [code]null[/code] when there is none (the Compatibility renderer, or headless). The [RenderingServer] exists when the physics server is created, but is not yet available as a singleton, so a server that needs the device receives it here.
+			</description>
+		</method>
 		<method name="set_default_server">
 			<return type="void" />
 			<param index="0" name="name" type="String" />
